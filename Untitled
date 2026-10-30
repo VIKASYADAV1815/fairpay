@@ -1,0 +1,59 @@
+# Project Overview: Fairpay
+
+## 1. The Vision
+**App Name:** Fairpay
+**Tagline:** Zero-friction trip expense tracking and automated settlements.
+**Core Philosophy:** Split expenses effortlessly during trips and settle up instantly with automated, batched WhatsApp UPI links. No math, no awkward conversations, no clunky interfaces.
+
+## 2. Design & Aesthetic (Strict Guidelines)
+- **Theme:** Strict Light Mode Only (No OS-level dark mode overrides).
+- **Vibe:** Premium, minimal, Apple / Vercel / Stripe aesthetic.
+- **Colors:** 
+  - Background: Pure White (`#FFFFFF`)
+  - Typography: High-contrast Pure Black (`#000000`) and subtle gray for secondary text.
+  - Borders/Dividers: Razor-thin, barely visible grays (`#E5E5E5` or similar).
+- **Typography:** System native sleek fonts (San Francisco on iOS, Inter/Geist style).
+- **Key Visual Element:** The "Giant Expense Counter" – massive, bold typography showing the total trip spend front and center.
+
+## 3. Tech Stack Context
+- **Framework:** React Native (Expo)
+- **Routing:** Expo Router
+- **Styling:** NativeWind (Tailwind CSS)
+- **State Management:** Zustand (Offline-first, blazing fast local state)
+
+---
+
+## 4. App Flow & User Journey
+
+### Phase 1: Onboarding & Trip Creation
+- **Action:** User opens the app (instant load, pure white screen).
+- **Input:** User creates a new trip by entering a "Trip Name" (e.g., *Manali Weekend*).
+- **Crew Addition:** User adds members to the trip. 
+  - *Data collected:* Name and UPI ID (optional at this stage, required later for settlement).
+
+### Phase 2: The Dashboard & Logging Expenses (The Active Trip)
+- **The View:** The main screen displays the active trip.
+- **The Hero:** The top of the screen features the "Giant Expense Counter" (e.g., **₹14,500**) updating in real-time.
+- **The List:** Below the counter is a clean, minimal, borderless list of recent expenses.
+- **Action (Adding an Expense):** 
+  - User taps a sleek "+" button (Action Sheet or Bottom Modal slides up).
+  - Inputs: What was it for? (e.g., *Dinner*), Amount (e.g., *₹2000*), Who paid? (Select from crew), Who is involved? (Split equally or custom).
+  - *Frictionless Rule:* No complex math variables shown to the user. Just simple selections.
+
+### Phase 3: The Settlement Engine (The Brain)
+- **Action:** When the trip ends, the user taps "Settle Up".
+- **The Calculation (Background):** The app calculates the net balance for everyone. It runs an algorithm to match those who owe money (debtors) with those who are owed money (creditors), minimizing the total number of transactions.
+- **The Output View:** A clean summary screen showing exactly who needs to pay whom. (e.g., *Vikas owes Karan ₹1500*).
+
+### Phase 4: Automated Batched WhatsApp & UPI Links (The Magic)
+- **Action:** Next to each settlement summary, there is a "Notify & Pay" button.
+- **The Magic:** Tapping this triggers a deep link to WhatsApp.
+- **The Message:** It automatically drafts a polite message to the debtor from the user's phone, containing a pre-filled UPI link.
+  - *Example output in WhatsApp:* "Hey [Name], your share for the trip is ₹[Amount]. You can pay [Creditor Name] directly here: [UPI Link]"
+- **Completion:** The debtor clicks the UPI link in WhatsApp, which opens their GPay/PhonePe with the amount and payee pre-filled.
+
+## 5. Development Principles for AI/Cursor
+- Prioritize visual cleanliness. If a border or shadow isn't necessary, remove it.
+- Keep the state management purely local first. Avoid backend database complexity until the core offline flow is flawless.
+- Do not use generic placeholder names in mock data. Use realistic Indian contexts (names like Vikas, Karan, amounts in INR ₹).
+- Focus on the Expo simulator experience; ensure the UI scales beautifully on iOS devices.
