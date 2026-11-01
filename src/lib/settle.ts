@@ -26,11 +26,14 @@ export function computeBalances(members: Member[], expenses: Expense[]): Balance
   members.forEach((m) => map.set(m.id, 0));
 
   for (const e of expenses) {
-    if (!e.splitAmongIds.length) continue;
-    const share = e.amount / e.splitAmongIds.length;
+    if (!e.splits || !e.splits.length) continue;
+    
+    // Payer gets credited the full amount
     map.set(e.paidById, (map.get(e.paidById) ?? 0) + e.amount);
-    for (const id of e.splitAmongIds) {
-      map.set(id, (map.get(id) ?? 0) - share);
+    
+    // Deduct each person's share
+    for (const split of e.splits) {
+      map.set(split.memberId, (map.get(split.memberId) ?? 0) - split.amount);
     }
   }
 

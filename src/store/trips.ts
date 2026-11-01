@@ -20,18 +20,32 @@ export function memberPayMethod(m: Member): PaymentMethod | undefined {
 
 export type ExpenseStatus = 'pending' | 'received' | 'settled';
 
+/** Per-person split tracking */
+export type ExpenseSplit = {
+  memberId: string;
+  amount: number;
+  /** Has this person paid their share? */
+  isPaid: boolean;
+  paidAt?: string;
+};
+
 export type Expense = {
   id: string;
   title: string;
   amount: number;
   paidById: string;
-  splitAmongIds: string[];
+  /** Per-person split amounts and payment status */
+  splits: ExpenseSplit[];
+  /** @deprecated - kept for migration from old format */
+  splitAmongIds?: string[];
+  /** @deprecated - kept for migration from old format */
+  customSplitAmounts?: Record<string, number>;
+  /** @deprecated - kept for migration from old format */
+  status?: ExpenseStatus;
   createdAt: string;
   recurring?: boolean;
   /** Free-form tag — user decides (Travel, Office, Rent…) */
   tag?: string;
-  /** Tick = settled, Received = money got, Pending = open */
-  status?: ExpenseStatus;
   /** Local receipt image URI */
   receiptUri?: string;
 };
@@ -62,6 +76,8 @@ export type Trip = {
 };
 
 type TripStore = {
+  /** Schema version for migration logic */
+  version: number;
   trips: Trip[];
   addTrip: (
     name: string,
@@ -91,21 +107,21 @@ type TripStore = {
       title: string;
       amount: number;
       paidById: string;
-      splitAmongIds: string[];
+      splits: ExpenseSplit[];
       recurring?: boolean;
       tag?: string;
-      status?: ExpenseStatus;
       receiptUri?: string;
     },
   ) => void;
   updateExpense: (
     tripId: string,
     expenseId: string,
-    data: Partial<Pick<Expense, 'title' | 'amount' | 'tag' | 'status' | 'recurring' | 'receiptUri'>>,
+    data: Partial<Pick<Expense, 'title' | 'amount' | 'tag' | 'recurring' | 'receiptUri' | 'paidById' | 'splits'>>,
   ) => void;
+  /** Mark a specific person's share as paid/unpaid */
+  toggleExpenseSplit: (tripId: string, expenseId: string, memberId: string) => void;
   removeExpense: (tripId: string, expenseId: string) => void;
   removeTrip: (tripId: string) => void;
-  setExpenseStatus: (tripId: string, expenseId: string, status: ExpenseStatus) => void;
   addCashback: (tripId: string, amount: number) => void;
   joinByInviteCode: (code: string, yourName?: string) => Trip | null;
   markTransferPaid: (
@@ -131,9 +147,12 @@ export function transferKey(fromId: string, toId: string, amount: number) {
   return `${fromId}|${toId}|${amount.toFixed(2)}`;
 }
 
+const CURRENT_VERSION = 2;
+
 export const useTripStore = create<TripStore>()(
   persist(
     (set, get) => ({
+  version: CURRENT_VERSION,
   trips: [],
 
   addTrip: (name, purpose, currency, creatorName) => {
@@ -225,7 +244,7 @@ export const useTripStore = create<TripStore>()(
               members: t.members.filter((m) => m.id !== memberId),
               expenses: t.expenses.map((e) => ({
                 ...e,
-                splitAmongIds: e.splitAmongIds.filter((id) => id !== memberId),
+                splitAmongIds: e.splitAmongIds?.filter((id) => id !== memberId),
               })),
             },
       ),
@@ -245,10 +264,9 @@ export const useTripStore = create<TripStore>()(
                   title: data.title,
                   amount: data.amount,
                   paidById: data.paidById,
-                  splitAmongIds: data.splitAmongIds,
+                  splits: data.splits,
                   recurring: data.recurring,
                   tag: data.tag?.trim() || undefined,
-                  status: data.status ?? 'pending',
                   receiptUri: data.receiptUri,
                   createdAt: new Date().toISOString(),
                 },
@@ -288,7 +306,7 @@ export const useTripStore = create<TripStore>()(
     set({ trips: get().trips.filter((t) => t.id !== tripId) });
   },
 
-  setExpenseStatus: (tripId, expenseId, status) => {
+  toggleExpenseSplit: (tripId, expenseId, memberId) => {
     set({
       trips: get().trips.map((t) =>
         t.id !== tripId
@@ -296,7 +314,20 @@ export const useTripStore = create<TripStore>()(
           : {
               ...t,
               expenses: t.expenses.map((e) =>
-                e.id === expenseId ? { ...e, status } : e,
+                e.id !== expenseId
+                  ? e
+                  : {
+                      ...e,
+                      splits: e.splits.map((s) =>
+                        s.memberId !== memberId
+                          ? s
+                          : {
+                              ...s,
+                              isPaid: !s.isPaid,
+                              paidAt: !s.isPaid ? new Date().toISOString() : undefined,
+                            },
+                      ),
+                    },
               ),
             },
       ),
@@ -383,7 +414,58 @@ export const useTripStore = create<TripStore>()(
 }),
     {
       name: 'fairpay-trips',
+      version: CURRENT_VERSION,
       storage: createJSONStorage(() => AsyncStorage),
+      migrate: (persistedState: any, version: number) => {
+        // Migrate from v1 to v2: Convert splitAmongIds to splits array
+        if (version < 2) {
+          const state = persistedState as TripStore;
+          state.trips = state.trips.map((t) => ({
+            ...t,
+            expenses: t.expenses.map((e: any) => {
+              // Already has splits? Keep it
+              if (e.splits && Array.isArray(e.splits)) return e;
+              
+              // Convert old format to new
+              const splits: ExpenseSplit[] = [];
+              const splitIds = e.splitAmongIds || [];
+              
+              if (e.customSplitAmounts) {
+                // Custom splits
+                splitIds.forEach((id: string) => {
+                  splits.push({
+                    memberId: id,
+                    amount: e.customSplitAmounts[id] || 0,
+                    isPaid: id === e.paidById, // Payer auto-paid
+                    paidAt: id === e.paidById ? e.createdAt : undefined,
+                  });
+                });
+              } else {
+                // Equal splits
+                const share = e.amount / (splitIds.length || 1);
+                splitIds.forEach((id: string) => {
+                  splits.push({
+                    memberId: id,
+                    amount: share,
+                    isPaid: id === e.paidById,
+                    paidAt: id === e.paidById ? e.createdAt : undefined,
+                  });
+                });
+              }
+              
+              return {
+                ...e,
+                splits,
+                // Keep old fields for compatibility
+                splitAmongIds: e.splitAmongIds,
+                customSplitAmounts: e.customSplitAmounts,
+                status: e.status,
+              };
+            }),
+          }));
+        }
+        return persistedState as TripStore;
+      },
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<TripStore>;
         const trips = (p.trips ?? current.trips).map((t) => ({
@@ -396,7 +478,7 @@ export const useTripStore = create<TripStore>()(
               m.paymentMethods?.length ? m.paymentMethods : fromLegacyUpi(m.upiId),
           })),
         }));
-        return { ...current, ...p, trips };
+        return { ...current, version: CURRENT_VERSION, ...p, trips };
       },
     },
   ),

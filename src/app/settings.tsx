@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, Pressable, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Switch, Alert } from 'react-native';
 // Pressable for routes + reminder hour
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -161,13 +161,19 @@ export default function SettingsScreen() {
             { icon: 'link-outline' as const, label: 'Join a group', route: '/join' },
             { icon: 'time-outline' as const, label: 'History', route: '/history' },
             { icon: 'gift-outline' as const, label: 'Deals', route: '/deals' },
-            { icon: 'help-circle-outline' as const, label: 'Help & FAQ' },
-            { icon: 'document-text-outline' as const, label: 'Privacy' },
+            { icon: 'help-circle-outline' as const, label: 'Help & FAQ', onPress: () => Alert.alert('Help', 'Documentation coming soon. For now, explore the app!') },
+            { icon: 'document-text-outline' as const, label: 'Privacy Policy', onPress: () => Alert.alert('Privacy', 'We store data locally on your device. No data is sent to servers yet. Backend privacy policy will be added when cloud sync launches.') },
           ] as const
         ).map((r) => (
           <Pressable
             key={r.label}
-            onPress={() => ('route' in r && r.route ? router.push(r.route as any) : undefined)}
+            onPress={() => {
+              if ('onPress' in r && r.onPress) {
+                r.onPress();
+              } else if ('route' in r && r.route) {
+                router.push(r.route as any);
+              }
+            }}
           >
             <SoftCard style={styles.row}>
               <View style={[styles.iconWrap, { backgroundColor: c.accent }]}>

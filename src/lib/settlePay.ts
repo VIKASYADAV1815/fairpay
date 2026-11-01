@@ -95,3 +95,115 @@ export async function openWhatsAppWithMessage(message: string, phoneDigits?: str
 export async function openPayLink(link: string) {
   await Linking.openURL(link);
 }
+
+/**
+ * Build WhatsApp message for expense notification (when someone adds a new expense)
+ * Notifies unpaid members immediately after expense is created
+ */
+export function buildExpenseNotificationMessage(opts: {
+  memberName: string;
+  payerName: string;
+  amount: number;
+  expenseTitle: string;
+  tripName: string;
+  currency?: string;
+  method?: PaymentMethod | null;
+  payLink?: string;
+  returnUrl?: string; // Deep link to return after payment
+}) {
+  const money = formatMoney(opts.amount, opts.currency);
+  const greeting = `Hey ${opts.memberName}! 👋`;
+  const main = `${opts.payerName} paid *${money}* for *${opts.expenseTitle}* in "${opts.tripName}".`;
+  const share = `Your share: *${money}*`;
+
+  const bits: string[] = [greeting, main, share];
+  
+  if (opts.method?.handle) {
+    bits.push(`\n💳 *PAY TO:*`);
+    bits.push(`${opts.payerName}`);
+    bits.push(`${railMeta(opts.method.rail).label}: ${opts.method.handle}`);
+  }
+  
+  if (opts.payLink) {
+    bits.push(`\n📱 *STEP 1 - Pay now:*`);
+    bits.push(opts.payLink);
+    bits.push(`👆 Tap to open payment app`);
+    
+    if (opts.returnUrl) {
+      bits.push(`\n✅ *STEP 2 - After paying:*`);
+      bits.push(opts.returnUrl);
+      bits.push(`👆 Tap to confirm in Fairpay`);
+    }
+  } else if (opts.returnUrl) {
+    bits.push(`\n✅ *After paying, confirm here:*`);
+    bits.push(opts.returnUrl);
+    bits.push(`👆 Tap to mark as paid`);
+  }
+  
+  bits.push('\n💚 — Fairpay');
+  return bits.join('\n');
+}
+
+/**
+ * Send WhatsApp notifications to all unpaid members after expense is created
+ * Opens WhatsApp for each member sequentially (user must tap through each one)
+ */
+export async function sendExpenseNotifications(opts: {
+  expense: {
+    id: string;
+    title: string;
+    amount: number;
+    paidById: string;
+    splits: Array<{ memberId: string; amount: number; isPaid: boolean }>;
+  };
+  members: Array<{ id: string; name: string; paymentMethods?: PaymentMethod[] }>;
+  tripId: string;
+  tripName: string;
+  currency?: string;
+  payerPhone?: string;
+}) {
+  const payer = opts.members.find((m) => m.id === opts.expense.paidById);
+  if (!payer) return;
+
+  const payerMethod = opts.members.find((m) => m.id === opts.expense.paidById)?.paymentMethods?.[0];
+  
+  // Get unpaid splits (everyone except the payer)
+  const unpaidSplits = opts.expense.splits.filter((s) => !s.isPaid);
+  
+  for (const split of unpaidSplits) {
+    const member = opts.members.find((m) => m.id === split.memberId);
+    if (!member) continue;
+
+    // Build payment link if payer has a payment method
+    const payLink = payerMethod
+      ? buildPayLink({
+          method: payerMethod,
+          payeeName: payer.name,
+          amount: split.amount,
+          note: `${opts.expense.title} - ${opts.tripName}`,
+        })
+      : undefined;
+
+    // Build return URL for after payment
+    const returnUrl = `fairpay://payment-complete?tripId=${opts.tripId}&expenseId=${opts.expense.id}&memberId=${split.memberId}`;
+
+    const message = buildExpenseNotificationMessage({
+      memberName: member.name,
+      payerName: payer.name,
+      amount: split.amount,
+      expenseTitle: opts.expense.title,
+      tripName: opts.tripName,
+      currency: opts.currency,
+      method: payerMethod,
+      payLink,
+      returnUrl,
+    });
+
+    // Open WhatsApp with the message
+    // Note: This opens WhatsApp sequentially - user needs to send/skip each message
+    await openWhatsAppWithMessage(message);
+    
+    // Add small delay between WhatsApp opens to avoid rate limiting
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}

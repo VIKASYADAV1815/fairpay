@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -17,35 +17,64 @@ import { FadeIn } from '@/components/FadeIn';
 import { EmptyArt } from '@/components/EmptyArt';
 import { AddCrewSheet } from '@/components/AddCrewSheet';
 import { AddExpenseSheet } from '@/components/AddExpenseSheet';
+import { EditExpenseSheet } from '@/components/EditExpenseSheet';
+import { ExpenseDetailSheet } from '@/components/ExpenseDetailSheet';
 import { ShareGroupSheet } from '@/components/ShareGroupSheet';
+import { PaymentConfirmationBanner } from '@/components/PaymentConfirmationBanner';
 import { OffersPanel } from '@/components/OffersPanel';
-import { useTripStore, type ExpenseStatus } from '@/store/trips';
+import { useTripStore, type ExpenseStatus, type Expense } from '@/store/trips';
+import { useNotificationStore, PaymentConfirmation } from '@/store/notifications';
 import { useProStore } from '@/store/pro';
 import { useColors, useThemeStore } from '@/store/theme';
 import { shareTripPdf } from '@/lib/report';
 import { computeBalances } from '@/lib/settle';
 import { currencySymbol, formatMoney } from '@/lib/currency';
+import { sendExpenseNotifications } from '@/lib/settlePay';
 import { space, type } from '@/theme/tokens';
 import { enter, spring } from '@/theme/motion';
 
 type SpendFilter = 'all' | ExpenseStatus;
 
 export default function TripScreen() {
-  const { id, onboard } = useLocalSearchParams<{ id: string; onboard?: string }>();
+  const { id, onboard, confirmPayment, memberId } = useLocalSearchParams<{
+    id: string;
+    onboard?: string;
+    confirmPayment?: string;
+    memberId?: string;
+  }>();
   const insets = useSafeAreaInsets();
   const c = useColors();
   const darkMode = useThemeStore((s) => s.darkMode);
   const trip = useTripStore((s) => s.trips.find((t) => t.id === id));
   const addMember = useTripStore((s) => s.addMember);
   const addExpense = useTripStore((s) => s.addExpense);
-  const setExpenseStatus = useTripStore((s) => s.setExpenseStatus);
+  const updateExpense = useTripStore((s) => s.updateExpense);
+  const toggleExpenseSplit = useTripStore((s) => s.toggleExpenseSplit);
   const removeExpense = useTripStore((s) => s.removeExpense);
   const removeTrip = useTripStore((s) => s.removeTrip);
   const addCashback = useTripStore((s) => s.addCashback);
   const isPro = useProStore((s) => s.isPro);
+  const addConfirmation = useNotificationStore((s) => s.addConfirmation);
+  const removeConfirmation = useNotificationStore((s) => s.removeConfirmation);
+  const markSeen = useNotificationStore((s) => s.markSeen);
+  const getForTrip = useNotificationStore((s) => s.getForTrip);
+  
+  // Use store getter to avoid selector re-render issues
+  const [pendingConfirmations, setPendingConfirmations] = useState<PaymentConfirmation[]>([]);
+  
+  // Only update when notification count changes (tracked via store subscription)
+  const notificationCount = useNotificationStore((s) => s.pendingConfirmations.length);
+  
+  useEffect(() => {
+    if (id) {
+      setPendingConfirmations(getForTrip(id));
+    }
+  }, [id, notificationCount, getForTrip]);
 
   const [crewOpen, setCrewOpen] = useState(false);
   const [expenseOpen, setExpenseOpen] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [detailExpense, setDetailExpense] = useState<Expense | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [filter, setFilter] = useState<SpendFilter>('all');
 
@@ -56,21 +85,129 @@ export default function TripScreen() {
     }
   }, [onboard]);
 
+  // Handle payment confirmation deep link
+  useEffect(() => {
+    if (confirmPayment && memberId && trip) {
+      const expense = trip.expenses.find((e) => e.id === confirmPayment);
+      const member = trip.members.find((m) => m.id === memberId);
+      const split = expense?.splits.find((s) => s.memberId === memberId);
+      
+      if (expense && member && split) {
+        // Check if already marked as paid
+        if (split.isPaid) {
+          // Already paid, just show success
+          Alert.alert(
+            '✅ Already confirmed!',
+            `Your payment of ${formatMoney(split.amount, trip.currency)} for "${expense.title}" is already marked as paid.`,
+            [{ text: 'Got it' }],
+          );
+          return;
+        }
+        
+        // Show payment confirmation dialog with better UX
+        const t = setTimeout(() => {
+          const payerName = trip.members.find((m) => m.id === expense.paidById)?.name || 'the payer';
+          
+          Alert.alert(
+            '💰 Confirm your payment',
+            `Did you complete the ${formatMoney(split.amount, trip.currency)} payment to ${payerName} for "${expense.title}"?\n\n✓ Tap "Yes" if payment is done\n✗ Tap "Not yet" if still pending`,
+            [
+              {
+                text: 'Not yet',
+                style: 'cancel',
+                onPress: () => {
+                  // Don't mark - user can try again later
+                  Alert.alert(
+                    'No worries',
+                    'Pay when ready, then return here to mark it.',
+                    [{ text: 'OK' }],
+                  );
+                },
+              },
+              {
+                text: '✓ Yes, I paid',
+                onPress: () => {
+                  // Toggle payment status
+                  toggleExpenseSplit(trip.id, confirmPayment, memberId);
+                  
+                  // Add notification for payer
+                  if (member) {
+                    addConfirmation({
+                      tripId: trip.id,
+                      expenseId: expense.id,
+                      memberId: member.id,
+                      memberName: member.name,
+                      amount: split.amount,
+                      expenseTitle: expense.title,
+                    });
+                  }
+                  
+                  // Show success feedback with better copy
+                  Alert.alert(
+                    '✅ Payment marked!',
+                    `${payerName} will be notified to confirm they received your payment. You'll be notified once confirmed.`,
+                    [{ text: 'Perfect' }],
+                  );
+                },
+              },
+            ],
+          );
+        }, 500);
+        return () => clearTimeout(t);
+      }
+    }
+  }, [confirmPayment, memberId, trip?.id]); // Only depend on trip.id, not entire trip object
+
   const total = useMemo(
     () => trip?.expenses.reduce((a, e) => a + e.amount, 0) ?? 0,
-    [trip],
+    [trip?.id, trip?.expenses.length], // Depend on ID and length, not array reference
   );
 
   const balances = useMemo(
-    () => (trip ? computeBalances(trip.members, trip.expenses) : []),
-    [trip],
+    () => {
+      if (!trip) return [];
+      try {
+        return computeBalances(trip.members, trip.expenses);
+      } catch (error) {
+        console.error('Error computing balances:', error);
+        return [];
+      }
+    },
+    [trip?.id, trip?.members.length, trip?.expenses.length], // Depend on lengths, not arrays
   );
 
   const filteredExpenses = useMemo(() => {
     if (!trip) return [];
-    if (filter === 'all') return trip.expenses;
-    return trip.expenses.filter((e) => (e.status ?? 'pending') === filter);
-  }, [trip, filter]);
+    
+    try {
+      const expenses = trip.expenses;
+      if (filter === 'all') return expenses;
+      
+      // Filter by payment status instead of legacy status field
+      return expenses.filter((e) => {
+        // Ensure splits exist (migration safety)
+        if (!e.splits || e.splits.length === 0) {
+          // Fallback to legacy status if splits don't exist
+          return (e.status ?? 'pending') === filter;
+        }
+        
+        const paidCount = e.splits.filter((s) => s.isPaid).length;
+        const totalCount = e.splits.length;
+        
+        if (filter === 'settled') {
+          return paidCount === totalCount; // All paid
+        } else if (filter === 'received') {
+          return paidCount > 0 && paidCount < totalCount; // Partially paid
+        } else if (filter === 'pending') {
+          return paidCount === 0 || paidCount < totalCount; // Not all paid
+        }
+        return true;
+      });
+    } catch (error) {
+      console.error('Error filtering expenses:', error);
+      return [];
+    }
+  }, [trip?.expenses, filter]); // Depend on expenses array
 
   if (!trip) {
     return (
@@ -99,9 +236,84 @@ export default function TripScreen() {
   };
 
   const cycleStatus = (expenseId: string, current?: ExpenseStatus) => {
-    const order: ExpenseStatus[] = ['pending', 'received', 'settled'];
-    const i = order.indexOf(current ?? 'pending');
-    setExpenseStatus(trip.id, expenseId, order[(i + 1) % order.length]);
+    // Legacy function - now opens detail sheet instead
+    setDetailExpense(trip.expenses.find((e) => e.id === expenseId) || null);
+  };
+
+  const handleToggleSplit = (expenseId: string, memberId: string) => {
+    const expense = trip.expenses.find((e) => e.id === expenseId);
+    if (!expense) return;
+
+    const split = expense.splits.find((s) => s.memberId === memberId);
+    if (!split) return;
+
+    const member = trip.members.find((m) => m.id === memberId);
+    const payer = trip.members.find((m) => m.id === expense.paidById);
+
+    if (!split.isPaid) {
+      // Member is marking as paid - toggle and create notification for payer
+      toggleExpenseSplit(trip.id, expenseId, memberId);
+      
+      if (member && payer) {
+        // Add notification for payer to confirm
+        addConfirmation({
+          tripId: trip.id,
+          expenseId: expense.id,
+          memberId: member.id,
+          memberName: member.name,
+          amount: split.amount,
+          expenseTitle: expense.title,
+        });
+      }
+      
+      // Show success feedback to the person who marked paid
+      Alert.alert(
+        '✓ Marked as paid',
+        `${payer?.name || 'The payer'} will be notified to confirm receipt.`,
+        [{ text: 'OK' }],
+      );
+    } else {
+      // Payer is unmarking - simpler flow
+      toggleExpenseSplit(trip.id, expenseId, memberId);
+    }
+  };
+
+  const handleConfirmPayment = (notificationId: string, expenseId: string, memberId: string) => {
+    // Payment already marked by member, payer just needs to acknowledge
+    // Since isPaid is already true, we just remove the notification
+    removeConfirmation(notificationId);
+    
+    // Optional: Show success message
+    const expense = trip.expenses.find((e) => e.id === expenseId);
+    const member = trip.members.find((m) => m.id === memberId);
+    
+    if (expense && member) {
+      Alert.alert(
+        '✓ Payment confirmed',
+        `${member.name}'s payment for ${expense.title} has been confirmed.`,
+        [{ text: 'OK' }],
+      );
+    }
+  };
+
+  const handleRejectPayment = (notificationId: string, expenseId: string, memberId: string) => {
+    Alert.alert(
+      'Reject payment?',
+      'This will unmark the payment. The person will need to mark it as paid again.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reject',
+          style: 'destructive',
+          onPress: () => {
+            // Unmark the payment
+            toggleExpenseSplit(trip.id, expenseId, memberId);
+            // Remove notification
+            removeConfirmation(notificationId);
+          },
+        },
+      ],
+    );
   };
 
   const confirmDeleteExpense = (expenseId: string, title: string) => {
@@ -110,7 +322,10 @@ export default function TripScreen() {
       {
         text: 'Delete',
         style: 'destructive',
-        onPress: () => removeExpense(trip.id, expenseId),
+        onPress: () => {
+          removeExpense(trip.id, expenseId);
+          setEditingExpense(null);
+        },
       },
     ]);
   };
@@ -194,6 +409,26 @@ export default function TripScreen() {
             </View>
           </View>
         </FadeIn>
+
+        {/* Payment Confirmation Banners */}
+        {pendingConfirmations.length > 0 && (
+          <View style={styles.notificationSection}>
+            {pendingConfirmations.map((notification) => (
+              <PaymentConfirmationBanner
+                key={notification.id}
+                notification={notification}
+                currency={trip.currency}
+                onConfirm={() => handleConfirmPayment(notification.id, notification.expenseId, notification.memberId)}
+                onDeny={() => handleRejectPayment(notification.id, notification.expenseId, notification.memberId)}
+                onDismiss={() => {
+                  markSeen(notification.id);
+                  // Optionally remove after a delay
+                  setTimeout(() => removeConfirmation(notification.id), 5000);
+                }}
+              />
+            ))}
+          </View>
+        )}
 
         <View style={styles.toolRow}>
           <Pressable
@@ -327,7 +562,49 @@ export default function TripScreen() {
           <View style={styles.list}>
             {filteredExpenses.map((e, i) => {
               const payer = trip.members.find((m) => m.id === e.paidById);
-              const status = e.status ?? 'pending';
+              
+              // Safety check: ensure splits exist
+              if (!e.splits || e.splits.length === 0) {
+                // Show old-style card for legacy expenses
+                return (
+                  <MotiView
+                    key={e.id}
+                    from={{ opacity: 0, translateY: 10 }}
+                    animate={{ opacity: 1, translateY: 0 }}
+                    transition={enter(80 + i * 40)}
+                  >
+                    <Pressable
+                      onPress={() => setEditingExpense(e)}
+                      onLongPress={() => setEditingExpense(e)}
+                      delayLongPress={450}
+                    >
+                      <SoftCard style={styles.expenseRow}>
+                        <View style={styles.expLeft}>
+                          <View style={[styles.expIcon, { backgroundColor: c.fillSecondary }]}>
+                            <Ionicons name="receipt-outline" size={18} color={c.text} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.expTitle, { color: c.text }]}>
+                              {e.title} · (Old format)
+                            </Text>
+                            <Text style={[styles.expMeta, { color: c.textSecondary }]}>
+                              {payer?.name ?? '—'} · {e.status ?? 'pending'}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={[styles.expAmount, { color: c.text }]}>
+                          {formatMoney(e.amount, trip.currency)}
+                        </Text>
+                      </SoftCard>
+                    </Pressable>
+                  </MotiView>
+                );
+              }
+              
+              const paidCount = e.splits.filter((s) => s.isPaid).length;
+              const totalCount = e.splits.length;
+              const allPaid = paidCount === totalCount;
+              
               return (
                 <MotiView
                   key={e.id}
@@ -336,39 +613,32 @@ export default function TripScreen() {
                   transition={enter(80 + i * 40)}
                 >
                   <Pressable
-                    onLongPress={() => confirmDeleteExpense(e.id, e.title)}
+                    onPress={() => setDetailExpense(e)}
+                    onLongPress={() => setEditingExpense(e)}
                     delayLongPress={450}
                   >
                     <SoftCard style={styles.expenseRow}>
                       <View style={styles.expLeft}>
-                        <Pressable
-                          onPress={() => cycleStatus(e.id, status)}
+                        <View
                           style={[
                             styles.expIcon,
                             {
-                              backgroundColor:
-                                status === 'settled'
-                                  ? c.accent
-                                  : status === 'received'
-                                    ? c.accentSoft
-                                    : c.fillSecondary,
+                              backgroundColor: allPaid ? c.accent : c.fillSecondary,
                             },
                           ]}
                         >
                           <Ionicons
                             name={
-                              status === 'settled'
-                                ? 'checkmark'
-                                : status === 'received'
-                                  ? 'arrow-down'
-                                  : e.recurring
-                                    ? 'repeat'
-                                    : 'receipt-outline'
+                              allPaid
+                                ? 'checkmark-circle'
+                                : e.recurring
+                                  ? 'repeat'
+                                  : 'receipt-outline'
                             }
                             size={18}
-                            color={c.accentInk}
+                            color={allPaid ? c.accentInk : c.text}
                           />
-                        </Pressable>
+                        </View>
                         <View style={{ flex: 1 }}>
                           <Text style={[styles.expTitle, { color: c.text }]}>
                             {e.title}
@@ -376,7 +646,7 @@ export default function TripScreen() {
                             {e.recurring ? ' · recurring' : ''}
                           </Text>
                           <Text style={[styles.expMeta, { color: c.textSecondary }]}>
-                            {payer?.name ?? '—'} · {status}
+                            {payer?.name ?? '—'} · {paidCount}/{totalCount} paid
                             {e.receiptUri ? ' · receipt' : ''}
                           </Text>
                         </View>
@@ -440,8 +710,26 @@ export default function TripScreen() {
         visible={expenseOpen}
         members={trip.members}
         currencySymbol={currencySymbol(trip.currency)}
+        tripId={trip.id}
+        tripName={trip.name}
         onClose={() => setExpenseOpen(false)}
-        onAdd={(data) => addExpense(trip.id, data)}
+        onAdd={async (data) => {
+          addExpense(trip.id, data);
+          
+          // Send WhatsApp notifications to unpaid members
+          try {
+            await sendExpenseNotifications({
+              expense: { ...data, id: 'temp' }, // ID will be assigned by store
+              members: trip.members,
+              tripId: trip.id,
+              tripName: trip.name,
+              currency: trip.currency,
+            });
+          } catch (error) {
+            // Silent fail - expense is already added, notifications are optional
+            console.warn('Failed to send WhatsApp notifications:', error);
+          }
+        }}
       />
 
       <ShareGroupSheet
@@ -449,6 +737,39 @@ export default function TripScreen() {
         groupName={trip.name}
         inviteCode={trip.inviteCode}
         onClose={() => setShareOpen(false)}
+      />
+      
+      <EditExpenseSheet
+        visible={!!editingExpense}
+        expense={editingExpense}
+        members={trip.members}
+        currencySymbol={currencySymbol(trip.currency)}
+        onClose={() => setEditingExpense(null)}
+        onUpdate={(expenseId, data) => {
+          updateExpense(trip.id, expenseId, data);
+          setEditingExpense(null);
+        }}
+        onDelete={(expenseId) => {
+          confirmDeleteExpense(expenseId, editingExpense?.title || '');
+        }}
+      />
+
+      <ExpenseDetailSheet
+        visible={!!detailExpense}
+        expense={detailExpense}
+        members={trip.members}
+        currencySymbol={currencySymbol(trip.currency)}
+        currency={trip.currency}
+        onClose={() => setDetailExpense(null)}
+        onTogglePaid={(memberId) => {
+          if (detailExpense) {
+            handleToggleSplit(detailExpense.id, memberId);
+          }
+        }}
+        onEdit={() => {
+          setEditingExpense(detailExpense);
+          setDetailExpense(null);
+        }}
       />
     </View>
   );
@@ -503,6 +824,10 @@ const styles = StyleSheet.create({
   metaMutedText: {
     ...type.caption1,
     fontWeight: '700',
+  },
+  notificationSection: {
+    marginTop: space.md,
+    marginBottom: space.md,
   },
   toolRow: {
     flexDirection: 'row',

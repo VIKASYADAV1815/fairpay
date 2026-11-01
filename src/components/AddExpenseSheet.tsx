@@ -28,12 +28,16 @@ type Props = {
   members: Member[];
   /** Currency symbol for the amount field (₹ $ € …) */
   currencySymbol?: string;
+  /** Trip ID for sending WhatsApp notifications */
+  tripId?: string;
+  /** Trip name for notification message */
+  tripName?: string;
   onClose: () => void;
   onAdd: (data: {
     title: string;
     amount: number;
     paidById: string;
-    splitAmongIds: string[];
+    splits: import('@/store/trips').ExpenseSplit[];
     recurring?: boolean;
     tag?: string;
     receiptUri?: string;
@@ -46,6 +50,8 @@ export function AddExpenseSheet({
   visible,
   members,
   currencySymbol = '₹',
+  tripId,
+  tripName,
   onClose,
   onAdd,
 }: Props) {
@@ -56,6 +62,8 @@ export function AddExpenseSheet({
   const [tag, setTag] = useState('');
   const [paidById, setPaidById] = useState(members[0]?.id ?? '');
   const [splitIds, setSplitIds] = useState<string[]>(members.map((m) => m.id));
+  const [splitMode, setSplitMode] = useState<'equal' | 'custom'>('equal');
+  const [customSplits, setCustomSplits] = useState<Record<string, number>>({});
   const [recurring, setRecurring] = useState(false);
   const [receiptUri, setReceiptUri] = useState<string | undefined>();
   const [aiBusy, setAiBusy] = useState(false);
@@ -65,17 +73,27 @@ export function AddExpenseSheet({
     if (!visible) return;
     setPaidById(members[0]?.id ?? '');
     setSplitIds(members.map((m) => m.id));
+    setSplitMode('equal');
+    setCustomSplits({});
     const t = setTimeout(() => titleRef.current?.focus?.(), 350);
     return () => clearTimeout(t);
   }, [visible, members]);
 
   const parsed = useMemo(() => Number(amount.replace(/,/g, '')), [amount]);
+  
+  const customTotal = useMemo(() => {
+    if (splitMode === 'equal') return 0;
+    return Object.values(customSplits).reduce((sum, val) => sum + (Number(val) || 0), 0);
+  }, [splitMode, customSplits]);
+  
   const canSave =
     title.trim().length > 0 &&
     Number.isFinite(parsed) &&
     parsed > 0 &&
     !!paidById &&
-    splitIds.length > 0;
+    (splitMode === 'equal' 
+      ? splitIds.length > 0 
+      : Math.abs(customTotal - parsed) < 0.01); // Allow 1 cent rounding error
 
   const toggleSplit = (id: string) => {
     setSplitIds((prev) =>
@@ -131,20 +149,51 @@ export function AddExpenseSheet({
 
   const handleSave = () => {
     if (!canSave) return;
+    
+    // Build ExpenseSplit array with per-person amounts and isPaid tracking
+    const splits: import('@/store/trips').ExpenseSplit[] = [];
+    
+    if (splitMode === 'equal') {
+      const share = parsed / splitIds.length;
+      splitIds.forEach((id) => {
+        splits.push({
+          memberId: id,
+          amount: share,
+          isPaid: id === paidById, // Payer is auto-paid
+          paidAt: id === paidById ? new Date().toISOString() : undefined,
+        });
+      });
+    } else {
+      // Custom split mode
+      Object.entries(customSplits).forEach(([id, amount]) => {
+        if (amount > 0) {
+          splits.push({
+            memberId: id,
+            amount,
+            isPaid: id === paidById,
+            paidAt: id === paidById ? new Date().toISOString() : undefined,
+          });
+        }
+      });
+    }
+    
     onAdd({
       title: title.trim(),
       amount: parsed,
       paidById,
-      splitAmongIds: splitIds,
+      splits,
       recurring,
       tag: tag.trim() || undefined,
       receiptUri,
     });
+    
     setTitle('');
     setAmount('');
     setTag('');
     setRecurring(false);
     setReceiptUri(undefined);
+    setSplitMode('equal');
+    setCustomSplits({});
     onClose();
   };
 
@@ -322,25 +371,95 @@ export function AddExpenseSheet({
               <Text style={[styles.sectionLabel, { color: c.textSecondary, marginTop: space.xl }]}>
                 Split equally among
               </Text>
-              <View style={styles.chips}>
-                {members.map((m) => {
-                  const on = splitIds.includes(m.id);
-                  return (
-                    <Pressable
-                      key={m.id}
-                      onPress={() => toggleSplit(m.id)}
-                      style={[
-                        styles.chip,
-                        { backgroundColor: on ? c.accent : c.fillSecondary },
-                      ]}
-                    >
-                      <Text style={[styles.chipText, { color: on ? c.accentInk : c.text }]}>
-                        {m.name}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
+              
+              <View style={styles.splitModeRow}>
+                <Pressable
+                  onPress={() => setSplitMode('equal')}
+                  style={[
+                    styles.splitModeBtn,
+                    { backgroundColor: splitMode === 'equal' ? c.accent : c.fillSecondary },
+                  ]}
+                >
+                  <Text style={[styles.splitModeText, { color: splitMode === 'equal' ? c.accentInk : c.text }]}>
+                    Equal split
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    setSplitMode('custom');
+                    // Initialize custom splits with equal amounts
+                    const each = parsed / members.length || 0;
+                    const init: Record<string, number> = {};
+                    members.forEach(m => init[m.id] = each);
+                    setCustomSplits(init);
+                  }}
+                  style={[
+                    styles.splitModeBtn,
+                    { backgroundColor: splitMode === 'custom' ? c.accent : c.fillSecondary },
+                  ]}
+                >
+                  <Text style={[styles.splitModeText, { color: splitMode === 'custom' ? c.accentInk : c.text }]}>
+                    Custom split
+                  </Text>
+                </Pressable>
               </View>
+              
+              {splitMode === 'equal' ? (
+                <View style={styles.chips}>
+                  {members.map((m) => {
+                    const on = splitIds.includes(m.id);
+                    return (
+                      <Pressable
+                        key={m.id}
+                        onPress={() => toggleSplit(m.id)}
+                        style={[
+                          styles.chip,
+                          { backgroundColor: on ? c.accent : c.fillSecondary },
+                        ]}
+                      >
+                        <Text style={[styles.chipText, { color: on ? c.accentInk : c.text }]}>
+                          {m.name}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : (
+                <>
+                  {members.map((m) => (
+                    <SoftCard key={m.id} tone="white" style={styles.customSplitRow}>
+                      <Text style={[styles.customSplitName, { color: c.text }]}>{m.name}</Text>
+                      <View style={styles.customSplitInput}>
+                        <Text style={[styles.rupee, { color: c.text, fontSize: 18 }]}>{currencySymbol}</Text>
+                        <TextInput
+                          value={String(customSplits[m.id] || '')}
+                          onChangeText={(val) => setCustomSplits(prev => ({ ...prev, [m.id]: Number(val) || 0 }))}
+                          placeholder="0"
+                          placeholderTextColor={c.textTertiary}
+                          style={[styles.customAmountInput, { color: c.text }]}
+                          keyboardType="decimal-pad"
+                          selectionColor={c.accent}
+                        />
+                      </View>
+                    </SoftCard>
+                  ))}
+                  <SoftCard tone={Math.abs(customTotal - parsed) < 0.01 ? 'accent' : 'fill'} style={{ marginTop: space.sm }}>
+                    <View style={styles.customTotalRow}>
+                      <Text style={[styles.customTotalLabel, { color: Math.abs(customTotal - parsed) < 0.01 ? c.accentInk : c.text }]}>
+                        Total assigned
+                      </Text>
+                      <Text style={[styles.customTotalValue, { color: Math.abs(customTotal - parsed) < 0.01 ? c.accentInk : c.text }]}>
+                        {currencySymbol}{customTotal.toFixed(2)} / {currencySymbol}{parsed.toFixed(2)}
+                      </Text>
+                    </View>
+                    {Math.abs(customTotal - parsed) >= 0.01 && (
+                      <Text style={[styles.customTotalHint, { color: c.textSecondary }]}>
+                        {customTotal < parsed ? '⚠️ Amounts don\'t add up' : '⚠️ Total exceeds expense'}
+                      </Text>
+                    )}
+                  </SoftCard>
+                </>
+              )}
             </>
           ) : (
             <SoftCard style={{ marginTop: space.xl }}>
@@ -415,6 +534,46 @@ const styles = StyleSheet.create({
   recurBody: { ...type.caption1, marginTop: 2 },
   warn: { ...type.subheadline },
   thumb: { width: 40, height: 40, borderRadius: 10 },
+  splitModeRow: {
+    flexDirection: 'row',
+    gap: space.sm,
+    marginBottom: space.md,
+  },
+  splitModeBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: space.md,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+  },
+  splitModeText: { ...type.footnote, fontWeight: '700' },
+  customSplitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: space.sm,
+    paddingVertical: space.md,
+    paddingHorizontal: space.lg,
+  },
+  customSplitName: { ...type.subheadline, flex: 1 },
+  customSplitInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  customAmountInput: {
+    ...type.title3,
+    width: 100,
+    textAlign: 'right',
+  },
+  customTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  customTotalLabel: { ...type.subheadline },
+  customTotalValue: { ...type.headline },
+  customTotalHint: { ...type.caption1, marginTop: space.xs },
   footer: {
     paddingHorizontal: space.xl,
     paddingBottom: space.xxxl,

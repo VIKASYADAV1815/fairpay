@@ -336,15 +336,12 @@ export default function HomeScreen() {
                     <SoftCard style={styles.tripCard}>
                       <View style={styles.tripLeft}>
                         <View style={[styles.tripAvatar, { backgroundColor: c.accent }]}>
-                          <Text style={[styles.tripAvatarText, { color: c.accentInk }]}>
-                            {trip.name.slice(0, 1).toUpperCase()}
-                          </Text>
+                          <Ionicons name="people" size={20} color={c.accentInk} />
                         </View>
                         <View>
                           <Text style={[styles.tripName, { color: c.text }]}>{trip.name}</Text>
                           <Text style={[styles.apyText, { color: c.textSecondary }]}>
-                            {trip.purpose ? `${trip.purpose} · ` : ''}
-                            {trip.members.length} people
+                            {trip.members.length} {trip.members.length === 1 ? 'person' : 'people'} · {trip.expenses.length} expenses
                           </Text>
                         </View>
                       </View>
