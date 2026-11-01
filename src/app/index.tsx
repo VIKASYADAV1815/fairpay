@@ -16,9 +16,9 @@ import { SoftCard } from '@/components/SoftCard';
 import { NewTripSheet } from '@/components/NewTripSheet';
 import { FadeIn } from '@/components/FadeIn';
 import { FairpayLogo } from '@/components/FairpayLogo';
-import { EarnStrip } from '@/components/EarnStrip';
 import { SectionLabel } from '@/components/SectionLabel';
 import { EmptyArt } from '@/components/EmptyArt';
+import { EmptyState } from '@/components/EmptyState';
 import { useTripStore, type ExpenseStatus } from '@/store/trips';
 import { useProStore } from '@/store/pro';
 import { useAuthStore } from '@/store/auth';
@@ -235,15 +235,10 @@ export default function HomeScreen() {
             onPress={() => setSheetOpen(true)}
           />
           <ActionTile icon="swap-horizontal-outline" label="Settle" delay={150} onPress={openSettle} />
-          <ActionTile icon="link-outline" label="Join" delay={200} onPress={() => router.push('/join')} />
-          <ActionTile icon="time-outline" label="History" delay={250} onPress={() => router.push('/history')} />
+          <ActionTile icon="time-outline" label="History" delay={200} onPress={() => router.push('/history')} />
         </View>
 
         <FadeIn delay={200}>
-          <EarnStrip />
-        </FadeIn>
-
-        <FadeIn delay={260}>
           <View style={styles.midRow}>
             <SoftCard tone={darkMode ? 'fill' : 'accent'} style={styles.midCard}>
               <Text
@@ -308,17 +303,10 @@ export default function HomeScreen() {
 
         <SectionLabel>Your groups</SectionLabel>
         {trips.length === 0 ? (
-          <Pressable onPress={() => setSheetOpen(true)}>
-            <SoftCard style={styles.emptyTripBlock}>
-              <EmptyArt kind="groups" width={140} height={100} />
-              <Text style={[styles.emptyTitle, { color: c.text, textAlign: 'center' }]}>
-                Start any shared spend
-              </Text>
-              <Text style={[styles.emptyBody, { color: c.textSecondary, textAlign: 'center' }]}>
-                Name it yourself — travel, office, rent… then invite 2+
-              </Text>
-            </SoftCard>
-          </Pressable>
+          <EmptyState
+            type="no-groups"
+            onAction={() => setSheetOpen(true)}
+          />
         ) : (
           <View style={styles.tripList}>
             {trips.map((trip, i) => {
@@ -386,13 +374,23 @@ export default function HomeScreen() {
         </ScrollView>
 
         {filteredSpend.length === 0 ? (
-          <SoftCard style={{ marginTop: space.sm, alignItems: 'center' }}>
-            <EmptyArt kind="spend" width={120} height={90} />
-            <Text style={[styles.emptyTitle, { color: c.text }]}>No spends here yet</Text>
-            <Text style={[styles.emptyBody, { color: c.textSecondary, textAlign: 'center' }]}>
-              Add expenses in a group, then filter by Tick / Received / Pending
-            </Text>
-          </SoftCard>
+          <EmptyState
+            type={allExpenses.length === 0 ? 'no-expenses' : 'no-filtered-expenses'}
+            onAction={() => {
+              if (allExpenses.length === 0) {
+                // No expenses at all - open first group or create one
+                if (trips.length > 0) {
+                  router.push({ pathname: '/trip/[id]', params: { id: trips[0].id } });
+                } else {
+                  setSheetOpen(true);
+                }
+              } else {
+                // Has expenses but filter is hiding them
+                setSpendFilter('all');
+              }
+            }}
+            actionLabel={allExpenses.length === 0 ? 'Add Expense' : 'Clear Filters'}
+          />
         ) : (
           filteredSpend.slice(0, 8).map((e, i) => (
             <MotiView

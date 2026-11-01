@@ -27,6 +27,7 @@ type Props = {
   onClose: () => void;
   onTogglePaid: (memberId: string) => void;
   onEdit?: () => void;
+  onSendReminder?: (memberId: string) => void; // NEW: Send reminder to specific member
 };
 
 export function ExpenseDetailSheet({
@@ -39,6 +40,7 @@ export function ExpenseDetailSheet({
   onClose,
   onTogglePaid,
   onEdit,
+  onSendReminder,
 }: Props) {
   const c = useColors();
 
@@ -287,6 +289,18 @@ export function ExpenseDetailSheet({
                       />
                     </Pressable>
                   )}
+                  {/* Show reminder button for unpaid members (if payer) */}
+                  {!split.isPaid && currentUserId === expense.paidById && onSendReminder && (
+                    <Pressable
+                      onPress={() => onSendReminder(split.memberId)}
+                      style={[
+                        styles.reminderBtn,
+                        { backgroundColor: c.fillSecondary },
+                      ]}
+                    >
+                      <Ionicons name="notifications-outline" size={16} color={c.text} />
+                    </Pressable>
+                  )}
                 </View>
               </SoftCard>
             );
@@ -463,6 +477,13 @@ const styles = StyleSheet.create({
     ...type.headline,
   },
   toggleBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reminderBtn: {
     width: 32,
     height: 32,
     borderRadius: 16,

@@ -21,7 +21,9 @@ import { EditExpenseSheet } from '@/components/EditExpenseSheet';
 import { ExpenseDetailSheet } from '@/components/ExpenseDetailSheet';
 import { ShareGroupSheet } from '@/components/ShareGroupSheet';
 import { PaymentConfirmationBanner } from '@/components/PaymentConfirmationBanner';
-import { OffersPanel } from '@/components/OffersPanel';
+import { ExpenseStatusBadge } from '@/components/ExpenseStatusBadge';
+import { EmptyState } from '@/components/EmptyState';
+import { ExpenseFilters, ExpenseFilterState } from '@/components/ExpenseFilters';
 import { useTripStore, type ExpenseStatus, type Expense } from '@/store/trips';
 import { useNotificationStore, PaymentConfirmation } from '@/store/notifications';
 import { useProStore } from '@/store/pro';
@@ -29,7 +31,8 @@ import { useColors, useThemeStore } from '@/store/theme';
 import { shareTripPdf } from '@/lib/report';
 import { computeBalances } from '@/lib/settle';
 import { currencySymbol, formatMoney } from '@/lib/currency';
-import { sendExpenseNotifications } from '@/lib/settlePay';
+import { sendExpenseNotifications, sendPaymentReminder } from '@/lib/settlePay';
+import { formatRelativeTime } from '@/lib/time';
 import { space, type } from '@/theme/tokens';
 import { enter, spring } from '@/theme/motion';
 
@@ -57,7 +60,6 @@ export default function TripScreen() {
   const addConfirmation = useNotificationStore((s) => s.addConfirmation);
   const removeConfirmation = useNotificationStore((s) => s.removeConfirmation);
   const markSeen = useNotificationStore((s) => s.markSeen);
-  const getForTrip = useNotificationStore((s) => s.getForTrip);
   
   // Use store getter to avoid selector re-render issues
   const [pendingConfirmations, setPendingConfirmations] = useState<PaymentConfirmation[]>([]);
@@ -67,9 +69,11 @@ export default function TripScreen() {
   
   useEffect(() => {
     if (id) {
-      setPendingConfirmations(getForTrip(id));
+      // Get notifications directly from store instead of using getForTrip
+      const allNotifications = useNotificationStore.getState().pendingConfirmations;
+      setPendingConfirmations(allNotifications.filter((n) => n.tripId === id));
     }
-  }, [id, notificationCount, getForTrip]);
+  }, [id, notificationCount]); // Removed getForTrip dependency
 
   const [crewOpen, setCrewOpen] = useState(false);
   const [expenseOpen, setExpenseOpen] = useState(false);
@@ -77,6 +81,11 @@ export default function TripScreen() {
   const [detailExpense, setDetailExpense] = useState<Expense | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [filter, setFilter] = useState<SpendFilter>('all');
+  const [expenseFilters, setExpenseFilters] = useState<ExpenseFilterState>({
+    searchQuery: '',
+    filterByPerson: null,
+    filterByStatus: 'all',
+  });
 
   useEffect(() => {
     if (onboard === '1') {
@@ -180,34 +189,76 @@ export default function TripScreen() {
     if (!trip) return [];
     
     try {
-      const expenses = trip.expenses;
-      if (filter === 'all') return expenses;
+      let expenses = trip.expenses;
       
-      // Filter by payment status instead of legacy status field
-      return expenses.filter((e) => {
-        // Ensure splits exist (migration safety)
-        if (!e.splits || e.splits.length === 0) {
-          // Fallback to legacy status if splits don't exist
-          return (e.status ?? 'pending') === filter;
-        }
-        
-        const paidCount = e.splits.filter((s) => s.isPaid).length;
-        const totalCount = e.splits.length;
-        
-        if (filter === 'settled') {
-          return paidCount === totalCount; // All paid
-        } else if (filter === 'received') {
-          return paidCount > 0 && paidCount < totalCount; // Partially paid
-        } else if (filter === 'pending') {
-          return paidCount === 0 || paidCount < totalCount; // Not all paid
-        }
-        return true;
-      });
+      // Apply search filter
+      if (expenseFilters.searchQuery.trim()) {
+        const query = expenseFilters.searchQuery.toLowerCase();
+        expenses = expenses.filter((e) =>
+          e.title.toLowerCase().includes(query) ||
+          e.tag?.toLowerCase().includes(query)
+        );
+      }
+      
+      // Apply person filter (who paid)
+      if (expenseFilters.filterByPerson) {
+        expenses = expenses.filter((e) => e.paidById === expenseFilters.filterByPerson);
+      }
+      
+      // Apply payment status filter
+      if (expenseFilters.filterByStatus !== 'all') {
+        expenses = expenses.filter((e) => {
+          // Ensure splits exist (migration safety)
+          if (!e.splits || e.splits.length === 0) {
+            // Fallback to legacy status if splits don't exist
+            const legacyStatus = e.status ?? 'pending';
+            if (expenseFilters.filterByStatus === 'paid') return legacyStatus === 'settled';
+            if (expenseFilters.filterByStatus === 'partial') return legacyStatus === 'received';
+            if (expenseFilters.filterByStatus === 'unpaid') return legacyStatus === 'pending';
+            return true;
+          }
+          
+          const paidCount = e.splits.filter((s) => s.isPaid).length;
+          const totalCount = e.splits.length;
+          
+          if (expenseFilters.filterByStatus === 'paid') {
+            return paidCount === totalCount; // All paid
+          } else if (expenseFilters.filterByStatus === 'partial') {
+            return paidCount > 0 && paidCount < totalCount; // Partially paid
+          } else if (expenseFilters.filterByStatus === 'unpaid') {
+            return paidCount === 0; // None paid
+          }
+          return true;
+        });
+      }
+      
+      // Apply legacy filter for backward compatibility
+      if (filter !== 'all') {
+        expenses = expenses.filter((e) => {
+          if (!e.splits || e.splits.length === 0) {
+            return (e.status ?? 'pending') === filter;
+          }
+          
+          const paidCount = e.splits.filter((s) => s.isPaid).length;
+          const totalCount = e.splits.length;
+          
+          if (filter === 'settled') {
+            return paidCount === totalCount;
+          } else if (filter === 'received') {
+            return paidCount > 0 && paidCount < totalCount;
+          } else if (filter === 'pending') {
+            return paidCount === 0 || paidCount < totalCount;
+          }
+          return true;
+        });
+      }
+      
+      return expenses;
     } catch (error) {
       console.error('Error filtering expenses:', error);
       return [];
     }
-  }, [trip?.expenses, filter]); // Depend on expenses array
+  }, [trip?.expenses, filter, expenseFilters]); // Depend on expenses array
 
   if (!trip) {
     return (
@@ -310,6 +361,57 @@ export default function TripScreen() {
             toggleExpenseSplit(trip.id, expenseId, memberId);
             // Remove notification
             removeConfirmation(notificationId);
+          },
+        },
+      ],
+    );
+  };
+
+  const handleSendReminder = async (expenseId: string, memberId: string) => {
+    const expense = trip.expenses.find((e) => e.id === expenseId);
+    if (!expense) return;
+
+    const member = trip.members.find((m) => m.id === memberId);
+    const payer = trip.members.find((m) => m.id === expense.paidById);
+    const split = expense.splits.find((s) => s.memberId === memberId);
+
+    if (!member || !payer || !split) return;
+
+    Alert.alert(
+      'Send reminder?',
+      `Send WhatsApp reminder to ${member.name} for ${formatMoney(split.amount, trip.currency)}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Send',
+          onPress: async () => {
+            try {
+              await sendPaymentReminder({
+                member,
+                payer,
+                expense: {
+                  id: expense.id,
+                  title: expense.title,
+                  amount: expense.amount,
+                },
+                splitAmount: split.amount,
+                tripId: trip.id,
+                tripName: trip.name,
+                currency: trip.currency,
+              });
+              
+              Alert.alert(
+                '✓ Reminder sent',
+                `WhatsApp reminder sent to ${member.name}.`,
+                [{ text: 'OK' }],
+              );
+            } catch (error) {
+              Alert.alert(
+                'Could not send',
+                'Failed to open WhatsApp. Try again.',
+                [{ text: 'OK' }],
+              );
+            }
           },
         },
       ],
@@ -519,6 +621,15 @@ export default function TripScreen() {
           Spending
         </Text>
 
+        {/* Search & Filter UI */}
+        <View style={{ marginBottom: space.md }}>
+          <ExpenseFilters
+            members={trip.members}
+            filters={expenseFilters}
+            onFiltersChange={setExpenseFilters}
+          />
+        </View>
+
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -545,19 +656,45 @@ export default function TripScreen() {
         </ScrollView>
 
         {filteredExpenses.length === 0 ? (
-          <FadeIn delay={160}>
-            <SoftCard style={styles.empty}>
-              <EmptyArt kind="spend" width={140} height={100} />
-              <Text style={[styles.emptyTitle, { color: c.text }]}>
-                {trip.expenses.length === 0 ? 'No expenses yet' : 'Nothing in this filter'}
-              </Text>
-              <Text style={[styles.emptyBody, { color: c.textSecondary }]}>
-                {trip.expenses.length === 0
-                  ? 'Tap + — tag it however you want · AI receipt scan coming (Pro)'
-                  : 'Tap an expense to cycle Tick / Received / Pending'}
-              </Text>
-            </SoftCard>
-          </FadeIn>
+          <EmptyState
+            type={
+              trip.expenses.length === 0
+                ? 'no-expenses'
+                : (expenseFilters.searchQuery.trim() || 
+                   expenseFilters.filterByPerson || 
+                   expenseFilters.filterByStatus !== 'all')
+                ? 'no-filtered-expenses'
+                : filter !== 'all'
+                ? 'no-filtered-expenses'
+                : 'no-expenses'
+            }
+            onAction={() => {
+              if (trip.expenses.length === 0) {
+                // No expenses - open add expense sheet
+                if (trip.members.length < 2) {
+                  Alert.alert(
+                    'Need 2+ people',
+                    'Add or invite at least one more person before logging a spend.',
+                    [
+                      { text: 'Add people', onPress: () => setCrewOpen(true) },
+                      { text: 'Invite', onPress: () => setShareOpen(true) },
+                    ],
+                  );
+                } else {
+                  setExpenseOpen(true);
+                }
+              } else {
+                // Has expenses but filters are hiding them - clear filters
+                setExpenseFilters({
+                  searchQuery: '',
+                  filterByPerson: null,
+                  filterByStatus: 'all',
+                });
+                setFilter('all');
+              }
+            }}
+            actionLabel={trip.expenses.length === 0 ? 'Add First Expense' : 'Clear Filters'}
+          />
         ) : (
           <View style={styles.list}>
             {filteredExpenses.map((e, i) => {
@@ -580,9 +717,6 @@ export default function TripScreen() {
                     >
                       <SoftCard style={styles.expenseRow}>
                         <View style={styles.expLeft}>
-                          <View style={[styles.expIcon, { backgroundColor: c.fillSecondary }]}>
-                            <Ionicons name="receipt-outline" size={18} color={c.text} />
-                          </View>
                           <View style={{ flex: 1 }}>
                             <Text style={[styles.expTitle, { color: c.text }]}>
                               {e.title} · (Old format)
@@ -592,9 +726,11 @@ export default function TripScreen() {
                             </Text>
                           </View>
                         </View>
-                        <Text style={[styles.expAmount, { color: c.text }]}>
-                          {formatMoney(e.amount, trip.currency)}
-                        </Text>
+                        <View style={styles.expRight}>
+                          <Text style={[styles.expAmount, { color: c.text }]}>
+                            {formatMoney(e.amount, trip.currency)}
+                          </Text>
+                        </View>
                       </SoftCard>
                     </Pressable>
                   </MotiView>
@@ -604,6 +740,12 @@ export default function TripScreen() {
               const paidCount = e.splits.filter((s) => s.isPaid).length;
               const totalCount = e.splits.length;
               const allPaid = paidCount === totalCount;
+              
+              // Get unpaid members for "Waiting for..." message
+              const unpaidMembers = e.splits
+                .filter((s) => !s.isPaid)
+                .map((s) => trip.members.find((m) => m.id === s.memberId)?.name)
+                .filter(Boolean);
               
               return (
                 <MotiView
@@ -619,41 +761,49 @@ export default function TripScreen() {
                   >
                     <SoftCard style={styles.expenseRow}>
                       <View style={styles.expLeft}>
-                        <View
-                          style={[
-                            styles.expIcon,
-                            {
-                              backgroundColor: allPaid ? c.accent : c.fillSecondary,
-                            },
-                          ]}
-                        >
-                          <Ionicons
-                            name={
-                              allPaid
-                                ? 'checkmark-circle'
-                                : e.recurring
-                                  ? 'repeat'
-                                  : 'receipt-outline'
-                            }
-                            size={18}
-                            color={allPaid ? c.accentInk : c.text}
-                          />
-                        </View>
                         <View style={{ flex: 1 }}>
-                          <Text style={[styles.expTitle, { color: c.text }]}>
-                            {e.title}
-                            {e.tag ? ` · ${e.tag}` : ''}
-                            {e.recurring ? ' · recurring' : ''}
-                          </Text>
-                          <Text style={[styles.expMeta, { color: c.textSecondary }]}>
-                            {payer?.name ?? '—'} · {paidCount}/{totalCount} paid
-                            {e.receiptUri ? ' · receipt' : ''}
+                          {/* Title row with status badge */}
+                          <View style={styles.expTitleRow}>
+                            <Text style={[styles.expTitle, { color: c.text, flex: 1 }]}>
+                              {e.title}
+                              {e.tag ? ` · ${e.tag}` : ''}
+                            </Text>
+                            <ExpenseStatusBadge paidCount={paidCount} totalCount={totalCount} />
+                          </View>
+                          
+                          {/* Meta row with payer and waiting info */}
+                          <View style={styles.expMetaRow}>
+                            <Text style={[styles.expMeta, { color: c.textSecondary }]}>
+                              {payer?.name ?? '—'} paid
+                            </Text>
+                            {unpaidMembers.length > 0 && unpaidMembers.length < totalCount && (
+                              <>
+                                <Text style={[styles.expMetaDot, { color: c.textTertiary }]}> · </Text>
+                                <Text style={[styles.expMetaWaiting, { color: c.textSecondary }]}>
+                                  Waiting for {unpaidMembers.slice(0, 2).join(', ')}
+                                  {unpaidMembers.length > 2 ? ` +${unpaidMembers.length - 2}` : ''}
+                                </Text>
+                              </>
+                            )}
+                            {e.receiptUri && (
+                              <>
+                                <Text style={[styles.expMetaDot, { color: c.textTertiary }]}> · </Text>
+                                <Ionicons name="image-outline" size={11} color={c.textSecondary} />
+                              </>
+                            )}
+                          </View>
+                          
+                          {/* Time row */}
+                          <Text style={[styles.expTime, { color: c.textTertiary }]}>
+                            {formatRelativeTime(e.createdAt)}
                           </Text>
                         </View>
                       </View>
-                      <Text style={[styles.expAmount, { color: c.text }]}>
-                        {formatMoney(e.amount, trip.currency)}
-                      </Text>
+                      <View style={styles.expRight}>
+                        <Text style={[styles.expAmount, { color: c.text }]}>
+                          {formatMoney(e.amount, trip.currency)}
+                        </Text>
+                      </View>
                     </SoftCard>
                   </Pressable>
                 </MotiView>
@@ -661,8 +811,6 @@ export default function TripScreen() {
             })}
           </View>
         )}
-
-        <OffersPanel tripId={trip.id} onCashback={(amount) => addCashback(trip.id, amount)} />
 
         <Pressable onPress={confirmDeleteGroup} style={{ marginTop: space.xxl }}>
           <Text style={[styles.deleteGroup, { color: c.danger }]}>Delete group</Text>
@@ -764,6 +912,11 @@ export default function TripScreen() {
         onTogglePaid={(memberId) => {
           if (detailExpense) {
             handleToggleSplit(detailExpense.id, memberId);
+          }
+        }}
+        onSendReminder={(memberId) => {
+          if (detailExpense) {
+            handleSendReminder(detailExpense.id, memberId);
           }
         }}
         onEdit={() => {
@@ -900,29 +1053,51 @@ const styles = StyleSheet.create({
   list: { gap: space.sm },
   expenseRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     marginBottom: space.sm,
+    gap: space.md,
   },
   expLeft: {
+    flex: 1,
+    minWidth: 0, // Allow text to truncate
+  },
+  expRight: {
+    alignItems: 'flex-end',
+  },
+  expTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.md,
-    flex: 1,
+    gap: space.sm,
+    marginBottom: 4,
   },
-  expIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+  expTitle: {
+    ...type.subheadline,
+  },
+  expMetaRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    flexWrap: 'wrap',
+    marginBottom: 2,
   },
-  expTitle: { ...type.subheadline },
   expMeta: {
     ...type.caption1,
+    fontWeight: '600',
+  },
+  expMetaDot: {
+    ...type.caption1,
+  },
+  expMetaWaiting: {
+    ...type.caption1,
+    fontStyle: 'italic',
+  },
+  expTime: {
+    ...type.caption2,
     marginTop: 2,
   },
-  expAmount: { ...type.headline },
+  expAmount: {
+    ...type.headline,
+  },
   fabWrap: { position: 'absolute', right: space.xl },
   fab: {
     width: 58,

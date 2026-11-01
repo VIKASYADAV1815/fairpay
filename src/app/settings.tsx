@@ -9,7 +9,7 @@ import { FadeIn } from '@/components/FadeIn';
 import { useProStore } from '@/store/pro';
 import { useAuthStore } from '@/store/auth';
 import { useColors, useThemeStore } from '@/store/theme';
-import { reminderLabel, useRemindersStore } from '@/store/reminders';
+import { reminderLabel, useRemindersStore, paymentReminderLabel } from '@/store/reminders';
 import { space, type } from '@/theme/tokens';
 
 export default function SettingsScreen() {
@@ -23,6 +23,12 @@ export default function SettingsScreen() {
   const setRemindersOn = useRemindersStore((s) => s.setEnabled);
   const reminderHour = useRemindersStore((s) => s.hour);
   const setReminderHour = useRemindersStore((s) => s.setHour);
+  
+  // Payment reminder settings
+  const paymentRemindersOn = useRemindersStore((s) => s.paymentRemindersEnabled);
+  const setPaymentRemindersOn = useRemindersStore((s) => s.setPaymentRemindersEnabled);
+  const paymentReminderHours = useRemindersStore((s) => s.paymentReminderHours);
+  const setPaymentReminderHours = useRemindersStore((s) => s.setPaymentReminderHours);
 
   return (
     <View style={[styles.screen, { backgroundColor: c.bg, paddingTop: insets.top }]}>
@@ -152,17 +158,67 @@ export default function SettingsScreen() {
           </SoftCard>
         ) : null}
 
+        {/* Payment Reminders Section */}
+        <Text style={[styles.sectionTitle, { color: c.textSecondary, marginTop: space.xl, marginBottom: space.sm }]}>
+          PAYMENT REMINDERS
+        </Text>
+
+        <SoftCard style={styles.row}>
+          <View style={[styles.iconWrap, { backgroundColor: c.accent }]}>
+            <Ionicons name="cash-outline" size={18} color={c.accentInk} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.label, { color: c.text, flex: 0 }]}>Auto-remind unpaid</Text>
+            <Text style={[styles.value, { color: c.textSecondary }]}>
+              {paymentRemindersOn ? paymentReminderLabel(paymentReminderHours) : 'Disabled'}
+            </Text>
+          </View>
+          <Switch
+            value={paymentRemindersOn}
+            onValueChange={setPaymentRemindersOn}
+            trackColor={{ false: c.fillSecondary, true: c.accent }}
+            thumbColor={c.white}
+          />
+        </SoftCard>
+
+        {paymentRemindersOn ? (
+          <SoftCard style={styles.row}>
+            <View style={[styles.iconWrap, { backgroundColor: c.accent }]}>
+              <Ionicons name="timer-outline" size={18} color={c.accentInk} />
+            </View>
+            <Text style={[styles.label, { color: c.text }]}>Remind after</Text>
+            <Pressable
+              onPress={() => {
+                // Cycle through common values: 24h → 48h → 72h → 0 (disabled)
+                const options = [24, 48, 72, 0];
+                const currentIndex = options.indexOf(paymentReminderHours);
+                const nextIndex = (currentIndex + 1) % options.length;
+                setPaymentReminderHours(options[nextIndex]);
+              }}
+              style={[styles.hourChip, { backgroundColor: c.fillSecondary }]}
+            >
+              <Text style={{ color: c.text, fontWeight: '700' }}>
+                {paymentReminderLabel(paymentReminderHours)}
+              </Text>
+            </Pressable>
+          </SoftCard>
+        ) : null}
+
+        <Text style={[styles.sectionTitle, { color: c.textSecondary, marginTop: space.xl, marginBottom: space.sm }]}>
+          GENERAL
+        </Text>
+
         {(
           [
             { icon: 'person-outline' as const, label: 'Profile', route: '/profile' },
             { icon: 'diamond-outline' as const, label: 'Fairpay Pro', value: isPro ? 'Active' : 'Upgrade', route: '/pro' },
             { icon: 'help-buoy-outline' as const, label: 'Setup questions', route: '/questions' },
-            { icon: 'sparkles-outline' as const, label: 'Welcome / onboarding', route: '/onboarding' },
             { icon: 'link-outline' as const, label: 'Join a group', route: '/join' },
+            { icon: 'sparkles-outline' as const, label: 'Welcome tutorial', route: '/onboarding' },
             { icon: 'time-outline' as const, label: 'History', route: '/history' },
-            { icon: 'gift-outline' as const, label: 'Deals', route: '/deals' },
             { icon: 'help-circle-outline' as const, label: 'Help & FAQ', onPress: () => Alert.alert('Help', 'Documentation coming soon. For now, explore the app!') },
             { icon: 'document-text-outline' as const, label: 'Privacy Policy', onPress: () => Alert.alert('Privacy', 'We store data locally on your device. No data is sent to servers yet. Backend privacy policy will be added when cloud sync launches.') },
+            { icon: 'information-circle-outline' as const, label: 'About Fairpay', onPress: () => Alert.alert('Fairpay v1.0', 'Zero-friction shared money tracking.\n\nBuilt with Expo & React Native.\n\n© 2026 Fairpay') },
           ] as const
         ).map((r) => (
           <Pressable
@@ -230,5 +286,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 12,
+  },
+  sectionTitle: {
+    ...type.caption2,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    marginLeft: 4,
   },
 });

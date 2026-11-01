@@ -207,3 +207,95 @@ export async function sendExpenseNotifications(opts: {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 }
+
+/**
+ * Build WhatsApp reminder message for unpaid expense
+ * Similar to initial notification but as a gentle reminder
+ */
+export function buildPaymentReminderMessage(opts: {
+  memberName: string;
+  payerName: string;
+  amount: number;
+  expenseTitle: string;
+  tripName: string;
+  currency?: string;
+  method?: PaymentMethod | null;
+  payLink?: string;
+  returnUrl?: string;
+}) {
+  const money = formatMoney(opts.amount, opts.currency);
+  const greeting = `Hey ${opts.memberName}! 👋`;
+  const reminder = `🔔 *Friendly reminder:*`;
+  const main = `You have *${money}* pending for *${opts.expenseTitle}* in "${opts.tripName}"`;
+
+  const bits: string[] = [greeting, reminder, main];
+  
+  if (opts.method?.handle) {
+    bits.push(`\n💳 *PAY TO:*`);
+    bits.push(`${opts.payerName}`);
+    bits.push(`${railMeta(opts.method.rail).label}: ${opts.method.handle}`);
+  }
+  
+  if (opts.payLink) {
+    bits.push(`\n📱 *Tap to pay:*`);
+    bits.push(opts.payLink);
+    
+    if (opts.returnUrl) {
+      bits.push(`\n✅ *After paying, confirm:*`);
+      bits.push(opts.returnUrl);
+    }
+  } else if (opts.returnUrl) {
+    bits.push(`\n✅ *Tap to mark as paid:*`);
+    bits.push(opts.returnUrl);
+  }
+  
+  bits.push('\n💚 — Fairpay');
+  return bits.join('\n');
+}
+
+/**
+ * Send payment reminder to a specific member for an unpaid expense
+ */
+export async function sendPaymentReminder(opts: {
+  member: { id: string; name: string; paymentMethods?: PaymentMethod[] };
+  payer: { id: string; name: string; paymentMethods?: PaymentMethod[] };
+  expense: {
+    id: string;
+    title: string;
+    amount: number;
+  };
+  splitAmount: number;
+  tripId: string;
+  tripName: string;
+  currency?: string;
+}) {
+  const payerMethod = opts.payer.paymentMethods?.[0];
+  
+  // Build payment link if payer has a payment method
+  const payLink = payerMethod
+    ? buildPayLink({
+        method: payerMethod,
+        payeeName: opts.payer.name,
+        amount: opts.splitAmount,
+        note: `${opts.expense.title} - ${opts.tripName}`,
+      })
+    : undefined;
+
+  // Build return URL
+  const returnUrl = `fairpay://payment-complete?tripId=${opts.tripId}&expenseId=${opts.expense.id}&memberId=${opts.member.id}`;
+
+  const message = buildPaymentReminderMessage({
+    memberName: opts.member.name,
+    payerName: opts.payer.name,
+    amount: opts.splitAmount,
+    expenseTitle: opts.expense.title,
+    tripName: opts.tripName,
+    currency: opts.currency,
+    method: payerMethod,
+    payLink,
+    returnUrl,
+  });
+
+  // Open WhatsApp with the reminder message
+  await openWhatsAppWithMessage(message);
+}
