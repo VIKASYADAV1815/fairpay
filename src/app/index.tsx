@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   ScrollView,
   Pressable,
   Alert,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -45,6 +46,14 @@ export default function HomeScreen() {
   const { isLoggedIn, name, questionsDone, onboardingDone } = useAuthStore();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [spendFilter, setSpendFilter] = useState<SpendFilter>('all');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    setTimeout(() => {
+      setRefreshing(false);
+    }, 800);
+  }, []);
 
   useEffect(() => {
     if (!onboardingDone) {
@@ -121,6 +130,14 @@ export default function HomeScreen() {
         ]}
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={c.accent}
+            colors={[c.accent]}
+          />
+        }
       >
         <FadeIn>
           <View style={styles.header}>

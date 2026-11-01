@@ -67,3 +67,31 @@ export function formatShortRelativeTime(date: string | Date): string {
   const day = then.getDate();
   return `${month} ${day}`;
 }
+
+/**
+ * Group expenses by time period for better list organization
+ */
+export function getTimeGroup(date: string | Date): 'today' | 'yesterday' | 'this-week' | 'earlier' {
+  const now = new Date();
+  const then = typeof date === 'string' ? new Date(date) : date;
+  
+  // Reset to start of day for accurate comparison
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const thenStart = new Date(then.getFullYear(), then.getMonth(), then.getDate());
+  
+  const diffDays = Math.floor((todayStart.getTime() - thenStart.getTime()) / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) return 'today';
+  if (diffDays === 1) return 'yesterday';
+  if (diffDays < 7) return 'this-week';
+  return 'earlier';
+}
+
+export function getTimeGroupLabel(group: 'today' | 'yesterday' | 'this-week' | 'earlier'): string {
+  switch (group) {
+    case 'today': return 'Today';
+    case 'yesterday': return 'Yesterday';
+    case 'this-week': return 'This Week';
+    case 'earlier': return 'Earlier';
+  }
+}

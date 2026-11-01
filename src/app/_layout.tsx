@@ -6,6 +6,7 @@ import { useColors, useThemeStore } from '@/store/theme';
 import { useTripStore } from '@/store/trips';
 import { useAuthStore } from '@/store/auth';
 import { parseInvitePayload } from '@/lib/invite';
+import { AuthGuard } from '@/components/AuthGuard';
 
 function useInviteDeepLink() {
   const joinByInviteCode = useTripStore((s) => s.joinByInviteCode);
@@ -63,7 +64,7 @@ export default function RootLayout() {
   useInviteDeepLink();
 
   return (
-    <>
+    <AuthGuard>
       <StatusBar style={darkMode ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
@@ -73,6 +74,7 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="index" options={{ animation: 'fade' }} />
+        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="onboarding" options={{ animation: 'fade' }} />
         <Stack.Screen name="login" options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="signup" options={{ animation: 'slide_from_bottom' }} />
@@ -83,6 +85,6 @@ export default function RootLayout() {
         />
         <Stack.Screen name="pro" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
       </Stack>
-    </>
+    </AuthGuard>
   );
 }

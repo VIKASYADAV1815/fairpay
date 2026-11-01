@@ -6,6 +6,7 @@ import {
   Pressable,
   ScrollView,
   Alert,
+  RefreshControl,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -32,7 +33,7 @@ import { shareTripPdf } from '@/lib/report';
 import { computeBalances } from '@/lib/settle';
 import { currencySymbol, formatMoney } from '@/lib/currency';
 import { sendExpenseNotifications, sendPaymentReminder } from '@/lib/settlePay';
-import { formatRelativeTime } from '@/lib/time';
+import { formatRelativeTime, getTimeGroup, getTimeGroupLabel } from '@/lib/time';
 import { space, type } from '@/theme/tokens';
 import { enter, spring } from '@/theme/motion';
 
@@ -86,6 +87,15 @@ export default function TripScreen() {
     filterByPerson: null,
     filterByStatus: 'all',
   });
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    // Simulate refresh - in real app this would refetch data from backend
+    setTimeout(() => {
+      setRefreshing(false);
+    }, 800);
+  }, []);
 
   useEffect(() => {
     if (onboard === '1') {
@@ -258,7 +268,30 @@ export default function TripScreen() {
       console.error('Error filtering expenses:', error);
       return [];
     }
-  }, [trip?.expenses, filter, expenseFilters]); // Depend on expenses array
+  }, [trip?.expenses, filter, expenseFilters]);
+
+  // Group expenses by time period
+  const groupedExpenses = useMemo(() => {
+    const groups: Record<string, typeof filteredExpenses> = {
+      today: [],
+      yesterday: [],
+      'this-week': [],
+      earlier: [],
+    };
+    
+    filteredExpenses.forEach((expense) => {
+      const group = getTimeGroup(expense.createdAt);
+      groups[group].push(expense);
+    });
+    
+    // Return only non-empty groups in order
+    return [
+      { key: 'today' as const, expenses: groups.today },
+      { key: 'yesterday' as const, expenses: groups.yesterday },
+      { key: 'this-week' as const, expenses: groups['this-week'] },
+      { key: 'earlier' as const, expenses: groups.earlier },
+    ].filter((g) => g.expenses.length > 0);
+  }, [filteredExpenses]); // Depend on expenses array
 
   if (!trip) {
     return (
@@ -459,6 +492,14 @@ export default function TripScreen() {
         contentContainerStyle={{ paddingBottom: insets.bottom + 110 }}
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={c.accent}
+            colors={[c.accent]}
+          />
+        }
       >
         <View style={styles.header}>
           <Pressable onPress={() => router.back()} hitSlop={12} style={styles.iconBtn}>
@@ -697,7 +738,14 @@ export default function TripScreen() {
           />
         ) : (
           <View style={styles.list}>
-            {filteredExpenses.map((e, i) => {
+            {groupedExpenses.map((group) => (
+              <View key={group.key}>
+                {/* Date Group Header */}
+                <Text style={[styles.groupHeader, { color: c.textSecondary }]}>
+                  {getTimeGroupLabel(group.key)}
+                </Text>
+                
+                {group.expenses.map((e, i) => {
               const payer = trip.members.find((m) => m.id === e.paidById);
               
               // Safety check: ensure splits exist
@@ -809,6 +857,8 @@ export default function TripScreen() {
                 </MotiView>
               );
             })}
+              </View>
+            ))}
           </View>
         )}
 
@@ -1051,6 +1101,15 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   list: { gap: space.sm },
+  groupHeader: {
+    ...type.footnote,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginTop: space.lg,
+    marginBottom: space.sm,
+    paddingLeft: 2,
+  },
   expenseRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',

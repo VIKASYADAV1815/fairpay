@@ -16,7 +16,7 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const c = useColors();
   const isPro = useProStore((s) => s.isPro);
-  const { isLoggedIn, name, logout } = useAuthStore();
+  const { isLoggedIn, name, user, logout } = useAuthStore();
   const darkMode = useThemeStore((s) => s.darkMode);
   const toggleDarkMode = useThemeStore((s) => s.toggleDarkMode);
   const remindersOn = useRemindersStore((s) => s.enabled);
@@ -43,7 +43,7 @@ export default function SettingsScreen() {
               ACCOUNT
             </Text>
             <Text style={[styles.bannerTitle, { color: darkMode ? c.text : c.accentInk }]}>
-              {isLoggedIn ? name : 'Guest mode'}
+              {user ? name : isLoggedIn ? name : 'Guest mode'}
             </Text>
             <Text
               style={[
@@ -56,13 +56,29 @@ export default function SettingsScreen() {
                 : 'Log in or sign up to unlock full setup.'}
             </Text>
             <View style={styles.authRow}>
-              {isLoggedIn ? (
+              {user || isLoggedIn ? (
                 <Pressable
                   style={[
                     styles.authBtn,
                     { backgroundColor: darkMode ? c.accent : c.accentInk },
                   ]}
-                  onPress={() => logout()}
+                  onPress={async () => {
+                    Alert.alert(
+                      'Log Out',
+                      'Are you sure you want to log out?',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Log Out',
+                          style: 'destructive',
+                          onPress: async () => {
+                            await logout();
+                            router.replace('/(auth)/phone');
+                          },
+                        },
+                      ]
+                    );
+                  }}
                 >
                   <Text
                     style={[
@@ -80,7 +96,7 @@ export default function SettingsScreen() {
                       styles.authBtn,
                       { backgroundColor: darkMode ? c.accent : c.accentInk },
                     ]}
-                    onPress={() => router.push('/login')}
+                    onPress={() => router.push('/(auth)/phone')}
                   >
                     <Text
                       style={[
@@ -100,7 +116,7 @@ export default function SettingsScreen() {
                         borderColor: 'rgba(0,0,0,0.08)',
                       },
                     ]}
-                    onPress={() => router.push('/signup')}
+                    onPress={() => router.push('/(auth)/phone')}
                   >
                     <Text style={[styles.authBtnText, { color: '#0A0A0A' }]}>Sign up</Text>
                   </Pressable>
