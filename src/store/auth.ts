@@ -8,10 +8,16 @@ import { DEFAULT_CURRENCY } from '@/lib/currency';
 import type { PaymentMethod } from '@/lib/payments';
 import { fromLegacyUpi } from '@/lib/payments';
 
-/** Auth store with Supabase integration */
+/** Auth store with Supabase OAuth integration */
 type AuthStore = {
   // Supabase auth
-  user: User | null;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    avatar?: string;
+    paymentMethods?: PaymentMethod[];
+  } | null;
   session: Session | null;
   isLoggedIn: boolean;
   
@@ -29,8 +35,15 @@ type AuthStore = {
   questionsDone: boolean;
   
   // Actions
-  setUser: (user: User | null) => void;
+  setUser: (user: {
+    id: string;
+    email: string;
+    name: string;
+    avatar?: string;
+    paymentMethods?: PaymentMethod[];
+  } | null) => void;
   setSession: (session: Session | null) => void;
+  setOnboardingDone: (done: boolean) => void;
   login: (email: string, name?: string) => void;
   signup: (name: string, email: string) => void;
   logout: () => Promise<void>;
@@ -44,6 +57,7 @@ type AuthStore = {
     preferredCurrency?: CurrencyCode;
     paymentMethods?: PaymentMethod[];
   }) => void;
+  updatePaymentMethods: (methods: PaymentMethod[]) => void;
 };
 
 export const useAuthStore = create<AuthStore>()(
@@ -68,11 +82,16 @@ export const useAuthStore = create<AuthStore>()(
       setUser: (user) => set({ 
         user,
         isLoggedIn: !!user,
-        phone: user?.phone || '',
+        name: user?.name || '',
+        email: user?.email || '',
+        paymentMethods: user?.paymentMethods || [],
       }),
       
       // Set Supabase session
       setSession: (session) => set({ session }),
+      
+      // Set onboarding done
+      setOnboardingDone: (done) => set({ onboardingDone: done }),
       
       // Legacy login (keep for compatibility)
       login: (email, name) =>
@@ -125,6 +144,8 @@ export const useAuthStore = create<AuthStore>()(
             paymentMethods,
           };
         }),
+      
+      updatePaymentMethods: (methods) => set({ paymentMethods: methods }),
     }),
     {
       name: 'fairpay-auth',
@@ -134,8 +155,44 @@ export const useAuthStore = create<AuthStore>()(
 );
 
 // Listen to auth state changes
-supabase.auth.onAuthStateChange((event, session) => {
-  console.log('Auth state changed:', event);
-  useAuthStore.getState().setSession(session);
-  useAuthStore.getState().setUser(session?.user || null);
-});
+if (__DEV__) {
+  const { isSupabaseConfigured } = require('@/lib/supabase');
+  if (isSupabaseConfigured()) {
+    supabase.auth.onAuthStateChange((event, session) => {
+      console.log('Auth state changed:', event);
+      const store = useAuthStore.getState();
+      store.setSession(session);
+      
+      if (session?.user) {
+        // Extract user info from OAuth metadata
+        const metadata = session.user.user_metadata;
+        store.setUser({
+          id: session.user.id,
+          email: session.user.email!,
+          name: metadata?.full_name || metadata?.name || metadata?.preferred_username || 'User',
+          avatar: metadata?.avatar_url || metadata?.picture,
+        });
+      } else {
+        store.setUser(null);
+      }
+    });
+  }
+} else {
+  supabase.auth.onAuthStateChange((event, session) => {
+    console.log('Auth state changed:', event);
+    const store = useAuthStore.getState();
+    store.setSession(session);
+    
+    if (session?.user) {
+      const metadata = session.user.user_metadata;
+      store.setUser({
+        id: session.user.id,
+        email: session.user.email!,
+        name: metadata?.full_name || metadata?.name || metadata?.preferred_username || 'User',
+        avatar: metadata?.avatar_url || metadata?.picture,
+      });
+    } else {
+      store.setUser(null);
+    }
+  });
+}

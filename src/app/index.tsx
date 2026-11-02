@@ -20,6 +20,7 @@ import { FairpayLogo } from '@/components/FairpayLogo';
 import { SectionLabel } from '@/components/SectionLabel';
 import { EmptyArt } from '@/components/EmptyArt';
 import { EmptyState } from '@/components/EmptyState';
+import { SyncingBadge } from '@/components/SyncingBadge';
 import { useTripStore, type ExpenseStatus } from '@/store/trips';
 import { useProStore } from '@/store/pro';
 import { useAuthStore } from '@/store/auth';
@@ -143,11 +144,12 @@ export default function HomeScreen() {
           <View style={styles.header}>
             <FairpayLogo width={140} />
             <View style={styles.headerActions}>
+              <SyncingBadge />
               <Pressable hitSlop={10} style={styles.headerIcon} onPress={() => router.push('/pro')}>
                 <Ionicons
                   name={isPro ? 'diamond' : 'diamond-outline'}
                   size={20}
-                  color={isPro ? c.accent : c.textSecondary}
+                  color={isPro ? '#00A3FF' : c.textSecondary}
                 />
               </Pressable>
               <Pressable
@@ -249,7 +251,28 @@ export default function HomeScreen() {
             label="New"
             highlight
             delay={100}
-            onPress={() => setSheetOpen(true)}
+            onPress={() => {
+              // Check if logged in before creating group
+              const user = useAuthStore.getState().user;
+              const isLoggedIn = useAuthStore.getState().isLoggedIn;
+              
+              if (!user && !isLoggedIn) {
+                Alert.alert(
+                  'Sign in Required',
+                  'Please sign in to create groups and sync across devices.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Sign In',
+                      onPress: () => router.push('/(auth)/phone'),
+                    },
+                  ]
+                );
+                return;
+              }
+              
+              setSheetOpen(true);
+            }}
           />
           <ActionTile icon="swap-horizontal-outline" label="Settle" delay={150} onPress={openSettle} />
           <ActionTile icon="time-outline" label="History" delay={200} onPress={() => router.push('/history')} />

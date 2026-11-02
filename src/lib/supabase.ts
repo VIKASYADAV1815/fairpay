@@ -5,17 +5,42 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // TODO: Replace these with your actual Supabase credentials
 // Get them from: https://app.supabase.com → Your Project → Settings → API
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'YOUR_SUPABASE_URL';
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'YOUR_ANON_KEY';
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    storage: AsyncStorage,
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
-  },
-});
+// Check if credentials are configured
+const isConfigured = supabaseUrl && supabaseAnonKey && supabaseUrl.startsWith('http');
+
+// Create a dummy client if not configured (prevents crashes during development)
+export const supabase = isConfigured
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        storage: AsyncStorage,
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false,
+      },
+    })
+  : createClient('https://placeholder.supabase.co', 'placeholder-key', {
+      auth: {
+        storage: AsyncStorage,
+        autoRefreshToken: false,
+        persistSession: false,
+        detectSessionInUrl: false,
+      },
+    });
+
+// Helper to check if Supabase is ready
+export const isSupabaseConfigured = () => isConfigured;
+
+// Log warning if not configured
+if (!isConfigured && __DEV__) {
+  console.warn(
+    '⚠️  Supabase not configured!\n' +
+    'Add EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY to .env file.\n' +
+    'Auth features will not work until configured.'
+  );
+}
 
 // Database types (auto-generated from Supabase schema)
 export type Database = {

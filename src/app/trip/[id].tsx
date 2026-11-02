@@ -25,15 +25,20 @@ import { PaymentConfirmationBanner } from '@/components/PaymentConfirmationBanne
 import { ExpenseStatusBadge } from '@/components/ExpenseStatusBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { ExpenseFilters, ExpenseFilterState } from '@/components/ExpenseFilters';
+import { SyncingBadge } from '@/components/SyncingBadge';
 import { useTripStore, type ExpenseStatus, type Expense } from '@/store/trips';
 import { useNotificationStore, PaymentConfirmation } from '@/store/notifications';
 import { useProStore } from '@/store/pro';
+import { useAuthStore } from '@/store/auth';
 import { useColors, useThemeStore } from '@/store/theme';
 import { shareTripPdf } from '@/lib/report';
 import { computeBalances } from '@/lib/settle';
 import { currencySymbol, formatMoney } from '@/lib/currency';
 import { sendExpenseNotifications, sendPaymentReminder } from '@/lib/settlePay';
 import { formatRelativeTime, getTimeGroup, getTimeGroupLabel } from '@/lib/time';
+import { subscribeToTripExpenses } from '@/lib/api/expenses';
+import { subscribeToTripMembers } from '@/lib/api/members';
+import { isCloudEnabled } from '@/lib/storage';
 import { space, type } from '@/theme/tokens';
 import { enter, spring } from '@/theme/motion';
 
@@ -49,6 +54,7 @@ export default function TripScreen() {
   const insets = useSafeAreaInsets();
   const c = useColors();
   const darkMode = useThemeStore((s) => s.darkMode);
+  const user = useAuthStore((s) => s.user);
   const trip = useTripStore((s) => s.trips.find((t) => t.id === id));
   const addMember = useTripStore((s) => s.addMember);
   const addExpense = useTripStore((s) => s.addExpense);
@@ -61,6 +67,31 @@ export default function TripScreen() {
   const addConfirmation = useNotificationStore((s) => s.addConfirmation);
   const removeConfirmation = useNotificationStore((s) => s.removeConfirmation);
   const markSeen = useNotificationStore((s) => s.markSeen);
+  
+  // Real-time sync: Subscribe to cloud updates
+  useEffect(() => {
+    if (!id || !user || !isCloudEnabled()) return;
+
+    console.log('[TripScreen] Setting up real-time subscriptions...');
+    
+    // Subscribe to expense changes
+    const expenseSub = subscribeToTripExpenses(id, () => {
+      console.log('[TripScreen] Real-time expense update');
+      setRefreshing(false);
+    });
+
+    // Subscribe to member changes
+    const membersSub = subscribeToTripMembers(id, () => {
+      console.log('[TripScreen] Real-time member update');
+      setRefreshing(false);
+    });
+
+    return () => {
+      console.log('[TripScreen] Cleaning up subscriptions...');
+      expenseSub.unsubscribe();
+      membersSub.unsubscribe();
+    };
+  }, [id, user]);
   
   // Use store getter to avoid selector re-render issues
   const [pendingConfirmations, setPendingConfirmations] = useState<PaymentConfirmation[]>([]);
@@ -505,9 +536,12 @@ export default function TripScreen() {
           <Pressable onPress={() => router.back()} hitSlop={12} style={styles.iconBtn}>
             <Ionicons name="chevron-back" size={24} color={c.text} />
           </Pressable>
-          <Text style={[styles.headerTitle, { color: c.text }]} numberOfLines={1}>
-            {trip.name}
-          </Text>
+          <View style={styles.headerCenter}>
+            <Text style={[styles.headerTitle, { color: c.text }]} numberOfLines={1}>
+              {trip.name}
+            </Text>
+            <SyncingBadge />
+          </View>
           <Pressable
             hitSlop={12}
             style={styles.iconBtn}
@@ -996,9 +1030,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  headerCenter: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
+  },
   headerTitle: {
     ...type.headline,
-    flex: 1,
     textAlign: 'center',
   },
   hero: { marginBottom: space.lg },

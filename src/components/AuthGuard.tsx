@@ -14,10 +14,18 @@ export function AuthGuard({ children }: AuthGuardProps) {
   useEffect(() => {
     const inAuthGroup = segments[0] === '(auth)';
 
+    // Allow access if either:
+    // 1. User is logged in (Supabase or legacy)
+    // 2. User is on home screen (they can use local mode)
+    // Only redirect to auth if trying to access protected features
+    
     if (!isLoggedIn && !user && !inAuthGroup) {
-      // User is not logged in and trying to access protected route
-      router.replace('/(auth)/phone');
-    } else if ((isLoggedIn || user) && inAuthGroup) {
+      // User not logged in, but let them use the app (local mode)
+      // They'll be prompted to sign up when trying to sync/invite
+      return;
+    }
+    
+    if ((isLoggedIn || user) && inAuthGroup) {
       // User is logged in and on auth screen - redirect to home
       router.replace('/');
     }

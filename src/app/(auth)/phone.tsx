@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { View, Text, TextInput, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, StyleSheet, Alert, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { FairpayLogo } from '@/components/FairpayLogo';
 import { useColors } from '@/store/theme';
@@ -12,6 +12,39 @@ export default function PhoneLoginScreen() {
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [countryCode, setCountryCode] = useState('+91');
+
+  // Show warning if Supabase is not configured
+  if (!isSupabaseConfigured()) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.bg }]}>
+        <StatusBar style="auto" />
+        <View style={styles.content}>
+          <View style={styles.header}>
+            <Text style={[styles.title, { color: colors.text }]}>
+              ⚠️ Backend Not Configured
+            </Text>
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+              Supabase credentials are missing. Add them to your .env file to enable authentication.
+            </Text>
+            <View style={[styles.codeBlock, { backgroundColor: colors.card, borderColor: colors.separator }]}>
+              <Text style={[styles.codeText, { color: colors.accent }]}>
+                EXPO_PUBLIC_SUPABASE_URL=...{'\n'}
+                EXPO_PUBLIC_SUPABASE_ANON_KEY=...
+              </Text>
+            </View>
+            <Text style={[styles.hint, { color: colors.textSecondary }]}>
+              See BACKEND-SETUP.md for instructions
+            </Text>
+          </View>
+          <PrimaryButton
+            label="Go Back"
+            onPress={() => router.back()}
+            style={styles.button}
+          />
+        </View>
+      </View>
+    );
+  }
 
   const validatePhone = (phoneNumber: string) => {
     // Remove spaces and dashes
@@ -117,6 +150,18 @@ export default function PhoneLoginScreen() {
             disabled={loading || phone.length === 0}
             style={styles.button}
           />
+
+          <TouchableOpacity
+            onPress={() => {
+              // Skip auth for now, use local-only mode
+              router.replace('/');
+            }}
+            style={styles.skipButton}
+          >
+            <Text style={[styles.skipText, { color: colors.textSecondary }]}>
+              Skip for now · Try without account
+            </Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.footer}>
@@ -197,12 +242,33 @@ const styles = StyleSheet.create({
   button: {
     marginTop: 32,
   },
+  skipButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  skipText: {
+    fontSize: 15,
+    fontWeight: '500',
+  },
   footer: {
     paddingBottom: 32,
   },
   terms: {
     fontSize: 13,
     textAlign: 'center',
+    lineHeight: 20,
+  },
+  codeBlock: {
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 24,
+    width: '100%',
+  },
+  codeText: {
+    fontFamily: 'monospace',
+    fontSize: 13,
     lineHeight: 20,
   },
 });

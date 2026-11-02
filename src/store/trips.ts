@@ -5,6 +5,8 @@ import type { CurrencyCode } from '@/lib/currency';
 import { DEFAULT_CURRENCY } from '@/lib/currency';
 import type { PayRail, PaymentMethod } from '@/lib/payments';
 import { fromLegacyUpi, primaryHandle } from '@/lib/payments';
+import { syncManager } from '@/lib/sync-manager';
+import { isCloudEnabled } from '@/lib/storage';
 
 export type Member = {
   id: string;
@@ -79,6 +81,12 @@ type TripStore = {
   /** Schema version for migration logic */
   version: number;
   trips: Trip[];
+  
+  /** Cloud sync state */
+  loading: boolean;
+  syncing: boolean;
+  error: string | null;
+  
   addTrip: (
     name: string,
     purpose?: string,
@@ -154,6 +162,11 @@ export const useTripStore = create<TripStore>()(
     (set, get) => ({
   version: CURRENT_VERSION,
   trips: [],
+  
+  // Cloud sync state
+  loading: false,
+  syncing: false,
+  error: null,
 
   addTrip: (name, purpose, currency, creatorName) => {
     const you = creatorName?.trim();
@@ -172,6 +185,19 @@ export const useTripStore = create<TripStore>()(
       createdAt: new Date().toISOString(),
     };
     set({ trips: [trip, ...get().trips] });
+    
+    // Sync to cloud if logged in
+    if (isCloudEnabled()) {
+      const { useAuthStore } = require('./auth');
+      const user = useAuthStore.getState().user;
+      if (user) {
+        syncManager.syncTrip(trip, user.id).catch((error) => {
+          console.error('Failed to sync trip:', error);
+          // Error is already queued by syncManager
+        });
+      }
+    }
+    
     return trip;
   },
 
@@ -252,29 +278,53 @@ export const useTripStore = create<TripStore>()(
   },
 
   addExpense: (tripId, data) => {
+    const expense: Expense = {
+      id: uid('exp'),
+      title: data.title,
+      amount: data.amount,
+      paidById: data.paidById,
+      splits: data.splits,
+      recurring: data.recurring,
+      tag: data.tag?.trim() || undefined,
+      receiptUri: data.receiptUri,
+      createdAt: new Date().toISOString(),
+    };
+    
     set({
       trips: get().trips.map((t) =>
         t.id !== tripId
           ? t
           : {
               ...t,
-              expenses: [
-                {
-                  id: uid('exp'),
-                  title: data.title,
-                  amount: data.amount,
-                  paidById: data.paidById,
-                  splits: data.splits,
-                  recurring: data.recurring,
-                  tag: data.tag?.trim() || undefined,
-                  receiptUri: data.receiptUri,
-                  createdAt: new Date().toISOString(),
-                },
-                ...t.expenses,
-              ],
+              expenses: [expense, ...t.expenses],
             },
       ),
     });
+    
+    // Sync to cloud if logged in
+    if (isCloudEnabled()) {
+      const { useAuthStore } = require('./auth');
+      const user = useAuthStore.getState().user;
+      if (user) {
+        const expenseData = {
+          tripId,
+          title: data.title,
+          amount: data.amount,
+          paidById: data.paidById,
+          tag: data.tag,
+          recurring: data.recurring,
+          splits: data.splits.map(s => ({
+            userId: s.memberId,
+            amount: s.amount,
+            isPaid: s.isPaid,
+          })),
+        };
+        
+        syncManager.syncExpense(expenseData).catch((error) => {
+          console.error('Failed to sync expense:', error);
+        });
+      }
+    }
   },
 
   updateExpense: (tripId, expenseId, data) => {
