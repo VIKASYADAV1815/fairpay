@@ -6,7 +6,6 @@ import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { Database } from '@/lib/supabase';
 
 type Trip = Database['public']['Tables']['trips']['Row'];
-type TripInsert = Database['public']['Tables']['trips']['Insert'];
 type TripUpdate = Database['public']['Tables']['trips']['Update'];
 
 /**
@@ -25,25 +24,37 @@ export function generateInviteCode(): string {
  * Create a new trip
  */
 export async function createTrip(data: {
+  id?: string;
   name: string;
   purpose?: string;
   currency?: string;
-  userId: string;
+  inviteCode?: string;
+  userId?: string;
 }): Promise<{ trip: Trip | null; error: Error | null }> {
   if (!isSupabaseConfigured()) {
     return { trip: null, error: new Error('Supabase not configured') };
   }
 
   try {
+    const isValidUUID = (str?: string | null) =>
+      str ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str) : false;
+
+    const validUserId = isValidUUID(data.userId) ? data.userId : null;
+
+    const payload: any = {
+      name: data.name,
+      purpose: data.purpose || null,
+      currency: data.currency || 'INR',
+      invite_code: (data.inviteCode || generateInviteCode()).toUpperCase(),
+      created_by: validUserId,
+    };
+    if (data.id) {
+      payload.id = data.id;
+    }
+
     const { data: trip, error } = await supabase
       .from('trips')
-      .insert({
-        name: data.name,
-        purpose: data.purpose || null,
-        currency: data.currency || 'INR',
-        invite_code: generateInviteCode(),
-        created_by: data.userId,
-      })
+      .insert(payload)
       .select()
       .single();
 
@@ -51,11 +62,19 @@ export async function createTrip(data: {
 
     // Also add creator as a member
     if (trip) {
-      await supabase.from('trip_members').insert({
+      const memberPayload: any = {
         trip_id: trip.id,
-        user_id: data.userId,
+        name: 'You',
         role: 'admin',
-      });
+      };
+      if (validUserId) {
+        memberPayload.user_id = validUserId;
+      }
+      try {
+        await supabase.from('trip_members').insert(memberPayload);
+      } catch {
+        // ignore
+      }
     }
 
     return { trip, error: null };
@@ -129,7 +148,7 @@ export async function getTrip(tripId: string): Promise<{
 
     return { trip, error: null };
   } catch (error) {
-    console.error('Get trip error:', error);
+    console.log('Get trip note:', error);
     return { trip: null, error: error as Error };
   }
 }
@@ -191,44 +210,41 @@ export async function deleteTrip(tripId: string): Promise<{ error: Error | null 
  */
 export async function joinTripByCode(
   inviteCode: string,
-  userId: string
+  userId?: string
 ): Promise<{ trip: Trip | null; error: Error | null }> {
   if (!isSupabaseConfigured()) {
     return { trip: null, error: new Error('Supabase not configured') };
   }
 
   try {
-    // Find trip by invite code
+    // Find trip by invite code (case-insensitive lookup)
     const { data: trip, error: tripError } = await supabase
       .from('trips')
       .select('*')
-      .eq('invite_code', inviteCode.toUpperCase())
+      .ilike('invite_code', inviteCode.trim().toUpperCase())
       .single();
 
     if (tripError) throw tripError;
     if (!trip) throw new Error('Invalid invite code');
 
-    // Check if already a member
-    const { data: existing } = await supabase
-      .from('trip_members')
-      .select('*')
-      .eq('trip_id', trip.id)
-      .eq('user_id', userId)
-      .single();
+    if (userId) {
+      // Check if already a member
+      const { data: existing } = await supabase
+        .from('trip_members')
+        .select('*')
+        .eq('trip_id', trip.id)
+        .eq('user_id', userId)
+        .single();
 
-    if (existing) {
-      // Already a member
-      return { trip, error: null };
+      if (!existing) {
+        // Add as member
+        await supabase.from('trip_members').insert({
+          trip_id: trip.id,
+          user_id: userId,
+          role: 'member',
+        });
+      }
     }
-
-    // Add as member
-    const { error: memberError } = await supabase.from('trip_members').insert({
-      trip_id: trip.id,
-      user_id: userId,
-      role: 'member',
-    });
-
-    if (memberError) throw memberError;
 
     return { trip, error: null };
   } catch (error) {

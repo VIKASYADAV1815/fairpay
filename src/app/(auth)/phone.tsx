@@ -1,17 +1,33 @@
 import { useState } from 'react';
-import { View, Text, TextInput, StyleSheet, Alert, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  StyleSheet,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  TouchableOpacity,
+  Pressable,
+  Modal,
+  ScrollView,
+} from 'react-native';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { Ionicons } from '@expo/vector-icons';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { FairpayLogo } from '@/components/FairpayLogo';
 import { useColors } from '@/store/theme';
+import { useAuthStore } from '@/store/auth';
+import { COUNTRY_CODES, type CountryCode } from '@/lib/countryCodes';
 
 export default function PhoneLoginScreen() {
   const { colors } = { colors: useColors() };
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
-  const [countryCode, setCountryCode] = useState('+91');
+  const [selectedCountry, setSelectedCountry] = useState<CountryCode>(COUNTRY_CODES[0]);
+  const [countryPickerVisible, setCountryPickerVisible] = useState(false);
 
   // Show warning if Supabase is not configured
   if (!isSupabaseConfigured()) {
@@ -21,12 +37,12 @@ export default function PhoneLoginScreen() {
         <View style={styles.content}>
           <View style={styles.header}>
             <Text style={[styles.title, { color: colors.text }]}>
-              ⚠️ Backend Not Configured
+              Backend setup needed
             </Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
               Supabase credentials are missing. Add them to your .env file to enable authentication.
             </Text>
-            <View style={[styles.codeBlock, { backgroundColor: colors.card, borderColor: colors.separator }]}>
+            <View style={[styles.codeBlock, { backgroundColor: '#0A0A0A', borderColor: '#333333' }]}>
               <Text style={[styles.codeText, { color: colors.accent }]}>
                 EXPO_PUBLIC_SUPABASE_URL=...{'\n'}
                 EXPO_PUBLIC_SUPABASE_ANON_KEY=...
@@ -36,27 +52,34 @@ export default function PhoneLoginScreen() {
               See BACKEND-SETUP.md for instructions
             </Text>
           </View>
-          <PrimaryButton
-            label="Go Back"
-            onPress={() => router.back()}
-            style={styles.button}
-          />
+          <View style={{ width: '100%', gap: 12, marginBottom: 32 }}>
+            <PrimaryButton
+              label="Continue in Demo Mode"
+              variant="accent"
+              onPress={() => {
+                useAuthStore.getState().setUser({
+                  id: 'demo_user_local',
+                  email: 'demo@fairpay.local',
+                  phone: '+91 98765 43210',
+                  name: 'Vikas',
+                });
+                router.replace('/(auth)/name-setup');
+              }}
+            />
+            <PrimaryButton
+              label="Go Back"
+              variant="black"
+              onPress={() => router.back()}
+            />
+          </View>
         </View>
       </View>
     );
   }
 
   const validatePhone = (phoneNumber: string) => {
-    // Remove spaces and dashes
     const cleaned = phoneNumber.replace(/[\s-]/g, '');
-    
-    // For India: 10 digits
-    if (countryCode === '+91') {
-      return /^\d{10}$/.test(cleaned);
-    }
-    
-    // General: 7-15 digits
-    return /^\d{7,15}$/.test(cleaned);
+    return cleaned.length >= 7 && cleaned.length <= 15;
   };
 
   const handleSendOTP = async () => {
@@ -65,15 +88,42 @@ export default function PhoneLoginScreen() {
       return;
     }
 
-    const fullPhone = `${countryCode}${phone.replace(/[\s-]/g, '')}`;
+    const fullPhone = `${selectedCountry.dialCode}${phone.replace(/[\s-]/g, '')}`;
     setLoading(true);
 
     try {
-      const { data, error } = await supabase.auth.signInWithOtp({
+      const { error } = await supabase.auth.signInWithOtp({
         phone: fullPhone,
       });
 
-      if (error) throw error;
+      if (error) {
+        // Catch Unsupported phone provider on free Supabase tier
+        const isUnsupported =
+          error.message?.includes('Unsupported phone provider') ||
+          error.message?.includes('provider') ||
+          error.message?.includes('gateway');
+
+        if (isUnsupported) {
+          Alert.alert(
+            'SMS Test Mode',
+            'Supabase SMS gateway is in developer mode. Use test code 123456 on the next screen to verify.',
+            [
+              {
+                text: 'Continue',
+                onPress: () => {
+                  router.push({
+                    pathname: '/(auth)/verify',
+                    params: { phone: fullPhone, isDemo: '1' },
+                  });
+                },
+              },
+            ],
+          );
+          return;
+        }
+
+        throw error;
+      }
 
       // Navigate to OTP verification screen
       router.push({
@@ -81,10 +131,22 @@ export default function PhoneLoginScreen() {
         params: { phone: fullPhone },
       });
     } catch (error: any) {
-      console.error('OTP error:', error);
+      console.warn('OTP error:', error?.message || error);
       Alert.alert(
-        'Error',
-        error.message || 'Failed to send OTP. Please try again.'
+        'Phone Verification',
+        'Could not send SMS. Would you like to proceed in Test Mode with code 123456?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Use Test Code',
+            onPress: () => {
+              router.push({
+                pathname: '/(auth)/verify',
+                params: { phone: fullPhone, isDemo: '1' },
+              });
+            },
+          },
+        ],
       );
     } finally {
       setLoading(false);
@@ -97,7 +159,7 @@ export default function PhoneLoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <StatusBar style="auto" />
-      
+
       <View style={styles.content}>
         <View style={styles.header}>
           <FairpayLogo width={148} />
@@ -115,22 +177,32 @@ export default function PhoneLoginScreen() {
           </Text>
 
           <View style={styles.phoneInput}>
-            <View style={[styles.countryCode, { 
-              backgroundColor: colors.card,
-              borderColor: colors.separator 
-            }]}>
+            <Pressable
+              onPress={() => setCountryPickerVisible(true)}
+              style={[
+                styles.countryCode,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.separator,
+                },
+              ]}
+            >
               <Text style={[styles.countryCodeText, { color: colors.text }]}>
-                {countryCode}
+                {selectedCountry.flag} {selectedCountry.dialCode}
               </Text>
-            </View>
+              <Ionicons name="chevron-down" size={12} color={colors.textSecondary} style={{ marginLeft: 2 }} />
+            </Pressable>
 
             <TextInput
-              style={[styles.input, { 
-                backgroundColor: colors.card,
-                color: colors.text,
-                borderColor: colors.separator 
-              }]}
-              placeholder="9876543210"
+              style={[
+                styles.input,
+                {
+                  backgroundColor: colors.card,
+                  color: colors.text,
+                  borderColor: colors.separator,
+                },
+              ]}
+              placeholder="98765 43210"
               placeholderTextColor={colors.textSecondary}
               value={phone}
               onChangeText={setPhone}
@@ -153,7 +225,6 @@ export default function PhoneLoginScreen() {
 
           <TouchableOpacity
             onPress={() => {
-              // Skip auth for now, use local-only mode
               router.replace('/');
             }}
             style={styles.skipButton}
@@ -167,12 +238,59 @@ export default function PhoneLoginScreen() {
         <View style={styles.footer}>
           <Text style={[styles.terms, { color: colors.textSecondary }]}>
             By continuing, you agree to our{' '}
-            <Text style={{ color: colors.accent }}>Terms</Text>
-            {' and '}
-            <Text style={{ color: colors.accent }}>Privacy Policy</Text>
+            <Text
+              onPress={() => router.push('/privacy')}
+              style={{ color: colors.text, textDecorationLine: 'underline', fontWeight: '600' }}
+            >
+              Terms & Privacy Policy
+            </Text>
           </Text>
         </View>
       </View>
+
+      {/* Country Code Picker Modal */}
+      <Modal
+        visible={countryPickerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCountryPickerVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { backgroundColor: colors.card }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Select Country Code</Text>
+              <Pressable onPress={() => setCountryPickerVisible(false)} hitSlop={10}>
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
+              </Pressable>
+            </View>
+
+            <ScrollView style={{ maxHeight: 380 }}>
+              {COUNTRY_CODES.map((item) => (
+                <Pressable
+                  key={`${item.code}-${item.dialCode}`}
+                  style={[
+                    styles.countryItem,
+                    { borderBottomColor: colors.separator },
+                    selectedCountry.dialCode === item.dialCode && {
+                      backgroundColor: colors.fillSecondary,
+                    },
+                  ]}
+                  onPress={() => {
+                    setSelectedCountry(item);
+                    setCountryPickerVisible(false);
+                  }}
+                >
+                  <Text style={styles.countryItemFlag}>{item.flag}</Text>
+                  <Text style={[styles.countryItemName, { color: colors.text }]}>{item.name}</Text>
+                  <Text style={[styles.countryItemDial, { color: colors.textSecondary }]}>
+                    {item.dialCode}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -215,15 +333,16 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   countryCode: {
-    width: 70,
+    flexDirection: 'row',
     height: 56,
     borderRadius: 12,
     borderWidth: 1,
+    paddingHorizontal: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   countryCodeText: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
   },
   input: {
@@ -271,4 +390,33 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  modalTitle: { fontSize: 18, fontWeight: '700' },
+  countryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+  },
+  countryItemFlag: { fontSize: 22, marginRight: 12 },
+  countryItemName: { flex: 1, fontSize: 16, fontWeight: '500' },
+  countryItemDial: { fontSize: 15, fontWeight: '600' },
 });

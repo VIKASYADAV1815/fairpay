@@ -9,11 +9,20 @@ import { useAuthStore } from '@/store/auth';
 
 export default function VerifyOTPScreen() {
   const { colors } = { colors: useColors() };
-  const { phone } = useLocalSearchParams<{ phone: string }>();
+  const { phone, email, type, isDemo, name } = useLocalSearchParams<{
+    phone?: string;
+    email?: string;
+    type?: 'signup' | 'email' | 'sms';
+    isDemo?: string;
+    name?: string;
+  }>();
+
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(60);
-  const inputRefs = useRef<Array<any>>([]);
+  const inputRefs = useRef<any[]>([]);
+
+  const targetIdentifier = email || phone || '';
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -34,8 +43,7 @@ export default function VerifyOTPScreen() {
         }
       });
       setOtp(newOtp);
-      
-      // Focus last filled input
+
       const lastIndex = Math.min(index + digits.length, 5);
       inputRefs.current[lastIndex]?.focus();
       return;
@@ -59,55 +67,175 @@ export default function VerifyOTPScreen() {
 
   const handleVerifyOTP = async () => {
     const otpCode = otp.join('');
-    
+
     if (otpCode.length !== 6) {
-      Alert.alert('Invalid OTP', 'Please enter the complete 6-digit code');
+      Alert.alert('Invalid Code', 'Please enter the complete 6-digit verification code.');
       return;
     }
 
     setLoading(true);
 
-    try {
-      const { data, error } = await supabase.auth.verifyOtp({
-        phone: phone!,
-        token: otpCode,
-        type: 'sms',
+    // ── Test / Demo Mode Verification (Strict 123456 check) ──
+    if (isDemo === '1') {
+      if (otpCode !== '123456') {
+        setLoading(false);
+        Alert.alert(
+          'Verification Failed',
+          'Incorrect code. In test mode, enter 123456 to verify.',
+        );
+        setOtp(['', '', '', '', '', '']);
+        inputRefs.current[0]?.focus();
+        return;
+      }
+
+      const cleanTarget = (email || phone || 'user').replace(/[^a-zA-Z0-9]/g, '');
+      const userEmail = email || `${phone?.replace(/\D/g, '') || 'user'}@fairpay.local`;
+      const displayName = name?.trim() || (email ? email.split('@')[0] : 'User');
+
+      useAuthStore.getState().setUser({
+        id: `demo_${cleanTarget}`,
+        email: userEmail,
+        phone: phone || '',
+        name: displayName,
+      });
+      useAuthStore.getState().updateProfile({
+        name: displayName,
+        email: userEmail,
+        phone: phone || '',
       });
 
-      if (error) throw error;
+      setLoading(false);
+      if (!name && !email) {
+        router.replace('/(auth)/name-setup');
+      } else {
+        router.replace('/');
+      }
+      return;
+    }
 
-      if (data.user) {
-        // Check if user profile exists
-        const { data: profile, error: profileError } = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', data.user.id)
-          .single();
+    // ── Real Supabase Verification ──
+    try {
+      let verifiedUser: any = null;
+      let session: any = null;
 
-        if (profileError && profileError.code !== 'PGRST116') {
-          // Error other than "not found"
-          throw profileError;
+      if (email) {
+        // First try the passed type, then fallback to alternate type
+        const primaryType = type === 'signup' ? 'signup' : 'email';
+        let verifyResponse = await supabase.auth.verifyOtp({
+          email: email.trim().toLowerCase(),
+          token: otpCode,
+          type: primaryType as any,
+        });
+
+        if (verifyResponse.error) {
+          const alternateType = primaryType === 'signup' ? 'email' : 'signup';
+          const altResponse = await supabase.auth.verifyOtp({
+            email: email.trim().toLowerCase(),
+            token: otpCode,
+            type: alternateType as any,
+          });
+
+          if (altResponse.error) {
+            throw verifyResponse.error;
+          }
+          verifyResponse = altResponse;
         }
 
-        // Update auth store
-        useAuthStore.getState().setUser(data.user);
-        useAuthStore.getState().setSession(data.session);
+        verifiedUser = verifyResponse.data.user;
+        session = verifyResponse.data.session;
+      } else if (phone) {
+        const verifyResponse = await supabase.auth.verifyOtp({
+          phone: phone.trim(),
+          token: otpCode,
+          type: 'sms',
+        });
 
-        if (!profile) {
-          // New user - go to profile creation
-          router.replace('/(auth)/profile');
+        if (verifyResponse.error) throw verifyResponse.error;
+
+        verifiedUser = verifyResponse.data.user;
+        session = verifyResponse.data.session;
+      }
+
+      if (verifiedUser) {
+        // Fetch or sync public.users profile
+        const { data: profile } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', verifiedUser.id)
+          .single();
+
+        const resolvedName =
+          name?.trim() ||
+          profile?.name ||
+          verifiedUser.user_metadata?.name ||
+          (email ? email.split('@')[0] : 'User');
+
+        try {
+          await supabase.from('users').upsert({
+            id: verifiedUser.id,
+            email: verifiedUser.email || email || '',
+            phone_number: verifiedUser.phone || phone || '',
+            name: resolvedName,
+            updated_at: new Date().toISOString(),
+          });
+        } catch {
+          // ignore upsert errors if public table is not fully writable
+        }
+
+        useAuthStore.getState().setUser({
+          id: verifiedUser.id,
+          email: verifiedUser.email || email || '',
+          phone: verifiedUser.phone || phone,
+          name: resolvedName,
+        });
+        useAuthStore.getState().setSession(session);
+        useAuthStore.getState().updateProfile({
+          name: resolvedName,
+          email: verifiedUser.email || email || '',
+          phone: verifiedUser.phone || phone || '',
+        });
+
+        if (!profile && !name) {
+          router.replace('/(auth)/name-setup');
         } else {
-          // Existing user - go to home
           router.replace('/');
         }
       }
     } catch (error: any) {
-      console.error('Verify error:', error);
-      Alert.alert(
-        'Verification Failed',
-        error.message || 'Invalid OTP. Please try again.'
-      );
-      // Clear OTP on error
+      console.warn('Verify error:', error?.message || error);
+      const isNetworkIssue =
+        error?.message?.includes('hostname') ||
+        error?.message?.includes('fetch failed') ||
+        error?.message?.includes('Network request failed');
+
+      if (isNetworkIssue) {
+        Alert.alert(
+          'Database Offline',
+          'Could not reach database to verify code. Continue in Demo Mode?',
+          [
+            { text: 'Retry', style: 'cancel' },
+            {
+              text: 'Continue in Demo',
+              onPress: () => {
+                const displayName = name?.trim() || (email ? email.split('@')[0] : 'User');
+                useAuthStore.getState().setUser({
+                  id: 'demo_user_local',
+                  email: email || `${phone?.replace(/\D/g, '') || 'user'}@fairpay.local`,
+                  phone: phone || '',
+                  name: displayName,
+                });
+                router.replace('/');
+              },
+            },
+          ],
+        );
+      } else {
+        Alert.alert(
+          'Verification Failed',
+          error?.message || 'Invalid 6-digit code. Please check and try again.',
+        );
+      }
+
       setOtp(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
     } finally {
@@ -121,19 +249,34 @@ export default function VerifyOTPScreen() {
     setLoading(true);
 
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        phone: phone!,
-      });
+      if (isDemo === '1') {
+        Alert.alert('Demo Code', 'Your test verification code is 123456');
+        setResendTimer(60);
+        setOtp(['', '', '', '', '', '']);
+        inputRefs.current[0]?.focus();
+        return;
+      }
 
-      if (error) throw error;
+      if (email) {
+        const { error } = await supabase.auth.signInWithOtp({
+          email: email.trim().toLowerCase(),
+        });
+        if (error) throw error;
+        Alert.alert('Code Sent', `A new 6-digit verification code has been sent to ${email}`);
+      } else if (phone) {
+        const { error } = await supabase.auth.signInWithOtp({
+          phone: phone.trim(),
+        });
+        if (error) throw error;
+        Alert.alert('Code Sent', `A new 6-digit verification code has been sent to ${phone}`);
+      }
 
-      Alert.alert('OTP Sent', 'A new OTP has been sent to your phone');
       setResendTimer(60);
       setOtp(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
     } catch (error: any) {
       console.error('Resend error:', error);
-      Alert.alert('Error', error.message || 'Failed to resend OTP');
+      Alert.alert('Error', error.message || 'Failed to resend code');
     } finally {
       setLoading(false);
     }
@@ -142,7 +285,7 @@ export default function VerifyOTPScreen() {
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <StatusBar style="auto" />
-      
+
       <View style={styles.content}>
         <View style={styles.header}>
           <Text style={[styles.title, { color: colors.text }]}>
@@ -152,15 +295,24 @@ export default function VerifyOTPScreen() {
             We sent a 6-digit code to
           </Text>
           <Text style={[styles.phone, { color: colors.text }]}>
-            {phone}
+            {targetIdentifier}
           </Text>
+          {isDemo === '1' && (
+            <View style={[styles.demoBadge, { backgroundColor: colors.card, borderColor: colors.separator }]}>
+              <Text style={[styles.demoBadgeText, { color: colors.textSecondary }]}>
+                Test Mode: Use code <Text style={{ color: colors.text, fontWeight: '700' }}>123456</Text>
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.otpContainer}>
           {otp.map((digit, index) => (
             <TextInput
               key={index}
-              ref={(ref) => { inputRefs.current[index] = ref; }}
+              ref={(ref) => {
+                inputRefs.current[index] = ref;
+              }}
               style={[
                 styles.otpInput,
                 {
@@ -180,7 +332,7 @@ export default function VerifyOTPScreen() {
         </View>
 
         <PrimaryButton
-          label={loading ? 'Verifying...' : 'Verify'}
+          label={loading ? 'Verifying...' : 'Verify & Continue'}
           onPress={handleVerifyOTP}
           disabled={loading || otp.join('').length !== 6}
           style={styles.button}
@@ -194,7 +346,7 @@ export default function VerifyOTPScreen() {
           ) : (
             <TouchableOpacity onPress={handleResendOTP} disabled={loading}>
               <Text style={[styles.resendButton, { color: colors.accent }]}>
-                Resend OTP
+                Resend Code
               </Text>
             </TouchableOpacity>
           )}
@@ -205,7 +357,7 @@ export default function VerifyOTPScreen() {
           style={styles.changeNumber}
         >
           <Text style={[styles.changeNumberText, { color: colors.textSecondary }]}>
-            Wrong number? Change it
+            Wrong {email ? 'email address' : 'number'}? Change it
           </Text>
         </TouchableOpacity>
       </View>
@@ -224,20 +376,30 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: 48,
+    marginBottom: 40,
   },
   title: {
     fontSize: 24,
     fontWeight: '700',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 15,
     marginBottom: 4,
   },
   phone: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '600',
+  },
+  demoBadge: {
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  demoBadgeText: {
+    fontSize: 12,
   },
   otpContainer: {
     flexDirection: 'row',
@@ -247,10 +409,10 @@ const styles = StyleSheet.create({
   },
   otpInput: {
     flex: 1,
-    height: 64,
+    height: 60,
     borderRadius: 12,
-    borderWidth: 2,
-    fontSize: 24,
+    borderWidth: 1.5,
+    fontSize: 22,
     fontWeight: '700',
     textAlign: 'center',
   },
@@ -262,10 +424,10 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   resendText: {
-    fontSize: 15,
+    fontSize: 14,
   },
   resendButton: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
   },
   changeNumber: {
@@ -273,6 +435,6 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   changeNumberText: {
-    fontSize: 15,
+    fontSize: 14,
   },
 });

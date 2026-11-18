@@ -1,17 +1,21 @@
 /**
  * Payment rails — country-aware handles for settle deep-links / share.
  * Fairpay does not move money; it stores preferred rails + builds messages.
+ * Ideal for solo developers: 0 merchant fees, 0 backend gateways, 100% native deep links.
  */
 
 export type PayRail =
   | 'upi'
+  | 'phonepe'
+  | 'gpay'
+  | 'paytm'
   | 'paypal'
   | 'venmo'
+  | 'cashapp'
   | 'pix'
   | 'wise'
   | 'revolut'
   | 'iban'
-  | 'cashapp'
   | 'other';
 
 export type PaymentMethod = {
@@ -25,74 +29,76 @@ export const PAY_RAILS: {
   placeholder: string;
   hint: string;
   regions: string;
+  brand: string;
 }[] = [
   {
     rail: 'upi',
-    label: 'UPI',
-    placeholder: 'name@okaxis',
-    hint: 'India · GPay / PhonePe / any UPI app',
+    label: 'UPI (Any App)',
+    placeholder: 'username@okhdfcbank',
+    hint: 'India · BHIM, Cred or any bank UPI',
     regions: 'IN',
+    brand: 'upi',
+  },
+  {
+    rail: 'phonepe',
+    label: 'PhonePe',
+    placeholder: '9876543210@ybl',
+    hint: 'India · PhonePe UPI ID',
+    regions: 'IN',
+    brand: 'phonepe',
+  },
+  {
+    rail: 'gpay',
+    label: 'Google Pay',
+    placeholder: 'name@okhdfcbank',
+    hint: 'India · GPay UPI ID',
+    regions: 'IN',
+    brand: 'gpay',
+  },
+  {
+    rail: 'paytm',
+    label: 'Paytm',
+    placeholder: '9876543210@paytm',
+    hint: 'India · Paytm UPI ID',
+    regions: 'IN',
+    brand: 'paytm',
   },
   {
     rail: 'paypal',
     label: 'PayPal',
-    placeholder: 'you@email.com or paypal.me/you',
-    hint: 'Global · email or paypal.me link',
+    placeholder: 'paypal.me/username',
+    hint: 'Global · paypal.me link or email',
     regions: 'Global',
+    brand: 'paypal',
   },
   {
     rail: 'venmo',
     label: 'Venmo',
     placeholder: '@username',
-    hint: 'US · Venmo username',
+    hint: 'US · Venmo handle',
     regions: 'US',
-  },
-  {
-    rail: 'pix',
-    label: 'Pix',
-    placeholder: 'CPF / email / phone / key',
-    hint: 'Brazil · Pix key',
-    regions: 'BR',
-  },
-  {
-    rail: 'wise',
-    label: 'Wise',
-    placeholder: 'tag or email',
-    hint: 'Cross-border · Wise tag',
-    regions: 'Global',
-  },
-  {
-    rail: 'revolut',
-    label: 'Revolut',
-    placeholder: 'revolut.me/you or @revtag',
-    hint: 'EU / UK · Revolut',
-    regions: 'EU/UK',
-  },
-  {
-    rail: 'iban',
-    label: 'Bank / IBAN',
-    placeholder: 'IBAN or account hint',
-    hint: 'SEPA / wire · share details in chat',
-    regions: 'EU+',
+    brand: 'venmo',
   },
   {
     rail: 'cashapp',
     label: 'Cash App',
     placeholder: '$cashtag',
-    hint: 'US · Cash App',
-    regions: 'US',
+    hint: 'US/UK · Cash App tag',
+    regions: 'US/UK',
+    brand: 'cashapp',
   },
   {
     rail: 'other',
-    label: 'Other',
-    placeholder: 'Handle or note',
-    hint: 'Any local app or cash',
+    label: 'Bank / Cash',
+    placeholder: 'Account / Bank note',
+    hint: 'Direct bank transfer or cash',
     regions: 'Global',
+    brand: 'bank',
   },
 ];
 
 export function railMeta(rail: PayRail) {
-  return PAY_RAILS.find((r) => r.rail === rail) ?? PAY_RAILS[PAY_RAILS.length - 1];
+  return PAY_RAILS.find((r) => r.rail === rail) ?? PAY_RAILS[0];
 }
 
 export function primaryHandle(methods?: PaymentMethod[] | null): PaymentMethod | undefined {

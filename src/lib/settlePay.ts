@@ -31,7 +31,7 @@ export function buildPayLink(opts: {
   if (!m?.handle) return undefined;
   const h = m.handle.trim();
 
-  if (m.rail === 'upi') {
+  if (m.rail === 'upi' || m.rail === 'phonepe' || m.rail === 'gpay' || m.rail === 'paytm') {
     return buildUpiLink({
       pa: h,
       pn: opts.payeeName,
@@ -299,3 +299,34 @@ export async function sendPaymentReminder(opts: {
   // Open WhatsApp with the reminder message
   await openWhatsAppWithMessage(message);
 }
+
+/**
+ * Send batch reminders to all unpaid members for an expense
+ */
+export async function sendBatchPaymentReminders(opts: {
+  unpaidMembers: Array<{ id: string; name: string; paymentMethods?: PaymentMethod[]; splitAmount: number }>;
+  payer: { id: string; name: string; paymentMethods?: PaymentMethod[] };
+  expense: {
+    id: string;
+    title: string;
+    amount: number;
+  };
+  tripId: string;
+  tripName: string;
+  currency?: string;
+}) {
+  for (const m of opts.unpaidMembers) {
+    await sendPaymentReminder({
+      member: m,
+      payer: opts.payer,
+      expense: opts.expense,
+      splitAmount: m.splitAmount,
+      tripId: opts.tripId,
+      tripName: opts.tripName,
+      currency: opts.currency,
+    });
+    // Delay so WhatsApp intent opens cleanly
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+

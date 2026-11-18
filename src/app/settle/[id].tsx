@@ -14,9 +14,10 @@ import { MotiView } from 'moti';
 import { SoftCard } from '@/components/SoftCard';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { FadeIn } from '@/components/FadeIn';
+import { SettledUp } from '@/assets/illustrations';
 import { transferKey, useTripStore } from '@/store/trips';
 import { useProStore } from '@/store/pro';
-import { useColors } from '@/store/theme';
+import { useColors, useThemeStore } from '@/store/theme';
 import { computeBalances, minimizeTransfers, type Transfer } from '@/lib/settle';
 import {
   buildPayLink,
@@ -32,10 +33,13 @@ export default function SettleScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const c = useColors();
+  const darkMode = useThemeStore((s) => s.darkMode);
   const trip = useTripStore((s) => s.trips.find((t) => t.id === id));
   const markTransferPaid = useTripStore((s) => s.markTransferPaid);
   const unmarkTransferPaid = useTripStore((s) => s.unmarkTransferPaid);
   const isPro = useProStore((s) => s.isPro);
+  const isTripUnlocked = useProStore((s) => s.isTripUnlocked);
+  const hasTripAccess = isPro || (trip?.id ? isTripUnlocked(trip.id) : false);
 
   const balances = useMemo(
     () => (trip ? computeBalances(trip.members, trip.expenses) : []),
@@ -95,15 +99,27 @@ export default function SettleScreen() {
   };
 
   const notifyAll = async () => {
-    if (!isPro) {
-      Alert.alert('Fairpay Pro', 'Batch WhatsApp settle is a Pro feature.', [
-        { text: 'Not now', style: 'cancel' },
-        { text: 'See Pro', onPress: () => router.push('/pro') },
-      ]);
+    if (!hasTripAccess) {
+      Alert.alert(
+        'Batch WhatsApp Settlement',
+        'Batch notify is unlocked with a ₹49 Trip Pass or Fairpay Pro.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          {
+            text: 'View Options',
+            onPress: () =>
+              router.push({
+                pathname: '/pro',
+                params: { tripId: trip.id },
+              }),
+          },
+        ],
+      );
       return;
     }
     for (const t of unpaid) {
       await notifyOne(t);
+      await new Promise((resolve) => setTimeout(resolve, 600));
     }
   };
 
@@ -157,8 +173,8 @@ export default function SettleScreen() {
         {allClear && transfers.length > 0 ? (
           <FadeIn delay={40}>
             <SoftCard tone="accent" style={{ marginBottom: space.xxl }}>
-              <Text style={[styles.clearTitle, { color: c.accentInk }]}>Settled ✓</Text>
-              <Text style={[styles.clearBody, { color: c.accentInk }]}>
+              <Text style={[styles.clearTitle, { color: darkMode ? c.accent : c.accentInk }]}>Settled ✓</Text>
+              <Text style={[styles.clearBody, { color: darkMode ? c.text : c.accentInk }]}>
                 Every transfer is marked paid. Nice work.
               </Text>
             </SoftCard>
@@ -178,7 +194,7 @@ export default function SettleScreen() {
               <Text
                 style={[
                   styles.balNet,
-                  { color: b.net >= 0 ? c.accentInk : c.danger },
+                  { color: b.net >= 0 ? c.green : c.danger },
                 ]}
               >
                 {b.net >= 0 ? '+' : '−'}
@@ -192,12 +208,13 @@ export default function SettleScreen() {
           Who pays whom
         </Text>
         {transfers.length === 0 ? (
-          <SoftCard tone="accent">
-            <Text style={[styles.clearTitle, { color: c.accentInk }]}>Nothing to settle</Text>
-            <Text style={[styles.clearBody, { color: c.accentInk }]}>
-              Everyone is even in this group.
+          <View style={styles.settledBlock}>
+            <SettledUp width={120} height={120} />
+            <Text style={[styles.clearTitle, { color: c.text }]}>All Settled Up!</Text>
+            <Text style={[styles.clearBody, { color: c.textSecondary }]}>
+              Everyone is completely even in this group.
             </Text>
-          </SoftCard>
+          </View>
         ) : (
           unpaid.map((t, i) => (
             <MotiView
@@ -261,7 +278,7 @@ export default function SettleScreen() {
                     </Text>
                   </View>
                   <Pressable onPress={() => togglePaid(t)} hitSlop={8}>
-                    <Ionicons name="checkmark-circle" size={28} color={c.accentInk} />
+                    <Ionicons name="checkmark-circle" size={28} color={c.green} />
                   </Pressable>
                 </SoftCard>
               </MotiView>
@@ -271,10 +288,10 @@ export default function SettleScreen() {
 
         {trip.potCashback > 0 ? (
           <SoftCard tone="accent" style={{ marginTop: space.xl }}>
-            <Text style={[styles.clearTitle, { color: c.accentInk }]}>
+            <Text style={[styles.clearTitle, { color: darkMode ? c.accent : c.accentInk }]}>
               Group pot · {formatMoney(trip.potCashback, trip.currency)}
             </Text>
-            <Text style={[styles.clearBody, { color: c.accentInk }]}>
+            <Text style={[styles.clearBody, { color: darkMode ? c.text : c.accentInk }]}>
               Affiliate cashback credited here
             </Text>
           </SoftCard>
@@ -354,7 +371,13 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   paidText: { ...type.caption2, fontWeight: '700' },
-  clearTitle: { ...type.title3 },
+  settledBlock: {
+    alignItems: 'center',
+    paddingVertical: space.xl,
+    paddingHorizontal: space.lg,
+    gap: space.xs,
+  },
+  clearTitle: { ...type.title3, marginTop: space.sm },
   clearBody: { ...type.footnote, marginTop: 4, opacity: 0.8 },
   footer: { paddingTop: space.md },
   missing: { ...type.title2 },

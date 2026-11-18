@@ -2,7 +2,7 @@
  * Syncing Badge - Shows sync status in header
  */
 
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { MotiView } from 'moti';
 import { useColors } from '@/store/theme';
@@ -39,7 +39,12 @@ export function SyncingBadge() {
       from={{ opacity: 0, scale: 0.9 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9 }}
-      style={[styles.badge, { backgroundColor: colors.fillSecondary }]}
+      style={[
+        styles.badge,
+        {
+          backgroundColor: status === 'syncing' ? '#0A0A0A' : colors.fillSecondary,
+        },
+      ]}
     >
       {status === 'syncing' ? (
         <ActivityIndicator size="small" color={config.color} />

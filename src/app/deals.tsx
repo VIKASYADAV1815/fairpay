@@ -43,7 +43,7 @@ export default function DealsScreen() {
         <FadeIn>
           <SoftCard tone={darkMode ? 'fill' : 'accent'} style={styles.hero}>
             <Text style={[styles.heroEyebrow, { color: darkMode ? c.accent : c.accentInk }]}>
-              GROUP POT
+              Group pot
             </Text>
             <Text style={[styles.heroTitle, { color: darkMode ? c.text : c.accentInk }]}>
               Book · split · cashback

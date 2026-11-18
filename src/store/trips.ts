@@ -132,6 +132,8 @@ type TripStore = {
   removeTrip: (tripId: string) => void;
   addCashback: (tripId: string, amount: number) => void;
   joinByInviteCode: (code: string, yourName?: string) => Trip | null;
+  joinByInviteCodeAsync: (code: string, yourName?: string) => Promise<Trip | null>;
+  syncTripFromCloud: (tripId: string) => Promise<void>;
   markTransferPaid: (
     tripId: string,
     data: { fromId: string; toId: string; amount: number },
@@ -155,6 +157,55 @@ export function transferKey(fromId: string, toId: string, amount: number) {
   return `${fromId}|${toId}|${amount.toFixed(2)}`;
 }
 
+export function mapCloudTripToLocal(
+  cloudTrip: any,
+  cloudMembers: any[],
+  cloudExpenses: any[],
+): Trip {
+  const members: Member[] = (cloudMembers || []).map((m: any) => {
+    const u = m.user || {};
+    const rawMethods = m.payment_methods || u.payment_methods || [];
+    const pm = Array.isArray(rawMethods) ? rawMethods : [];
+    const upi = pm.find?.((p: any) => p?.rail === 'upi')?.handle;
+    return {
+      id: m.user_id || m.id,
+      name: u.name || m.name || 'Member',
+      upiId: upi,
+      paymentMethods: pm.length > 0 ? pm : undefined,
+    };
+  });
+
+  const expenses: Expense[] = (cloudExpenses || []).map((e: any) => ({
+    id: e.id,
+    title: e.title,
+    amount: Number(e.amount) || 0,
+    paidById: e.paid_by_id || '',
+    splits: (e.splits || []).map((s: any) => ({
+      memberId: s.user_id,
+      amount: Number(s.amount) || 0,
+      isPaid: Boolean(s.is_paid),
+      paidAt: s.paid_at || undefined,
+    })),
+    recurring: Boolean(e.recurring),
+    tag: e.tag || undefined,
+    receiptUri: e.receipt_url || undefined,
+    createdAt: e.created_at || new Date().toISOString(),
+  }));
+
+  return {
+    id: cloudTrip.id,
+    name: cloudTrip.name,
+    purpose: cloudTrip.purpose || undefined,
+    currency: (cloudTrip.currency as CurrencyCode) || DEFAULT_CURRENCY,
+    inviteCode: cloudTrip.invite_code || '',
+    members,
+    expenses,
+    paidTransfers: [],
+    potCashback: Number(cloudTrip.pot_cashback) || 0,
+    createdAt: cloudTrip.created_at || new Date().toISOString(),
+  };
+}
+
 const CURRENT_VERSION = 2;
 
 export const useTripStore = create<TripStore>()(
@@ -170,6 +221,22 @@ export const useTripStore = create<TripStore>()(
 
   addTrip: (name, purpose, currency, creatorName) => {
     const you = creatorName?.trim();
+    let creatorPayMethods: PaymentMethod[] | undefined;
+    let creatorUpi: string | undefined;
+    try {
+      const { useAuthStore } = require('./auth');
+      const auth = useAuthStore.getState();
+      if (auth.paymentMethods && auth.paymentMethods.length > 0) {
+        creatorPayMethods = auth.paymentMethods;
+        creatorUpi = auth.paymentMethods.find((p: any) => p.rail === 'upi')?.handle || auth.upiId;
+      } else if (auth.upiId) {
+        creatorUpi = auth.upiId;
+        creatorPayMethods = fromLegacyUpi(auth.upiId);
+      }
+    } catch {
+      // ignore if store not available yet
+    }
+
     const trip: Trip = {
       id: uid('trip'),
       name: name.trim(),
@@ -177,7 +244,12 @@ export const useTripStore = create<TripStore>()(
       currency: currency ?? DEFAULT_CURRENCY,
       inviteCode: makeInviteCode(),
       members: you
-        ? [{ id: uid('m'), name: you }]
+        ? [{
+            id: uid('m'),
+            name: you,
+            upiId: creatorUpi,
+            paymentMethods: creatorPayMethods,
+          }]
         : [],
       expenses: [],
       paidTransfers: [],
@@ -186,16 +258,13 @@ export const useTripStore = create<TripStore>()(
     };
     set({ trips: [trip, ...get().trips] });
     
-    // Sync to cloud if logged in
+    // Sync to cloud
     if (isCloudEnabled()) {
       const { useAuthStore } = require('./auth');
       const user = useAuthStore.getState().user;
-      if (user) {
-        syncManager.syncTrip(trip, user.id).catch((error) => {
-          console.error('Failed to sync trip:', error);
-          // Error is already queued by syncManager
-        });
-      }
+      syncManager.syncTrip(trip, user?.id || 'guest').catch((error) => {
+        console.log('[Sync] group queued/synced:', error?.message);
+      });
     }
     
     return trip;
@@ -212,6 +281,13 @@ export const useTripStore = create<TripStore>()(
       paymentMethods = [{ rail, handle: pay.handle.trim() }];
       if (rail === 'upi') upiId = pay.handle.trim();
     }
+    const memberId = uid('m');
+    const newMember: Member = {
+      id: memberId,
+      name: name.trim(),
+      upiId,
+      paymentMethods: paymentMethods?.length ? paymentMethods : undefined,
+    };
     set({
       trips: get().trips.map((t) =>
         t.id !== tripId
@@ -220,16 +296,26 @@ export const useTripStore = create<TripStore>()(
               ...t,
               members: [
                 ...t.members,
-                {
-                  id: uid('m'),
-                  name: name.trim(),
-                  upiId,
-                  paymentMethods: paymentMethods?.length ? paymentMethods : undefined,
-                },
+                newMember,
               ],
             },
       ),
     });
+
+    if (isCloudEnabled()) {
+      try {
+        const { addTripMember } = require('@/lib/api/members');
+        addTripMember({
+          tripId,
+          name: name.trim(),
+          upiId,
+          role: 'member',
+          paymentMethods: paymentMethods?.length ? paymentMethods : undefined,
+        }).catch((err: any) => console.log('[Sync] addMember note:', err?.message));
+      } catch {
+        // ignore
+      }
+    }
   },
 
   updateMember: (tripId, memberId, data) => {
@@ -275,6 +361,15 @@ export const useTripStore = create<TripStore>()(
             },
       ),
     });
+
+    if (isCloudEnabled()) {
+      try {
+        const { removeTripMember } = require('@/lib/api/members');
+        removeTripMember(tripId, memberId).catch((err: any) => console.log('[Sync] removeMember note:', err?.message));
+      } catch {
+        // ignore
+      }
+    }
   },
 
   addExpense: (tripId, data) => {
@@ -350,6 +445,15 @@ export const useTripStore = create<TripStore>()(
           : { ...t, expenses: t.expenses.filter((e) => e.id !== expenseId) },
       ),
     });
+
+    if (isCloudEnabled()) {
+      try {
+        const { deleteExpense } = require('@/lib/api/expenses');
+        deleteExpense(expenseId).catch((err: any) => console.log('[Sync] deleteExpense note:', err?.message));
+      } catch {
+        // ignore
+      }
+    }
   },
 
   removeTrip: (tripId) => {
@@ -357,6 +461,7 @@ export const useTripStore = create<TripStore>()(
   },
 
   toggleExpenseSplit: (tripId, expenseId, memberId) => {
+    let nextPaid = false;
     set({
       trips: get().trips.map((t) =>
         t.id !== tripId
@@ -368,31 +473,62 @@ export const useTripStore = create<TripStore>()(
                   ? e
                   : {
                       ...e,
-                      splits: e.splits.map((s) =>
-                        s.memberId !== memberId
-                          ? s
-                          : {
-                              ...s,
-                              isPaid: !s.isPaid,
-                              paidAt: !s.isPaid ? new Date().toISOString() : undefined,
-                            },
-                      ),
+                      splits: e.splits.map((s) => {
+                        if (s.memberId !== memberId) return s;
+                        nextPaid = !s.isPaid;
+                        return {
+                          ...s,
+                          isPaid: nextPaid,
+                          paidAt: nextPaid ? new Date().toISOString() : undefined,
+                        };
+                      }),
                     },
               ),
             },
       ),
     });
+
+    if (isCloudEnabled()) {
+      try {
+        const { toggleSplitPayment } = require('@/lib/api/expenses');
+        toggleSplitPayment(expenseId, nextPaid).catch((err: any) => console.log('[Sync] toggleSplit note:', err?.message));
+      } catch {
+        // ignore
+      }
+    }
   },
 
   joinByInviteCode: (code, yourName) => {
     const normalized = code.trim().toUpperCase();
     const existing = get().trips.find((t) => t.inviteCode === normalized);
+    
+    let joinName = yourName?.trim();
+    let joinPay: PaymentMethod | undefined;
+    try {
+      const { useAuthStore } = require('./auth');
+      const auth = useAuthStore.getState();
+      if (!joinName) joinName = auth.name || 'Friend';
+      if (auth.paymentMethods && auth.paymentMethods.length > 0) {
+        joinPay = auth.paymentMethods[0];
+      } else if (auth.upiId) {
+        joinPay = { rail: 'upi', handle: auth.upiId };
+      }
+    } catch {
+      // ignore
+    }
+
     if (existing) {
-      if (yourName?.trim()) {
-        get().addMember(existing.id, yourName.trim());
+      if (joinName && !existing.members.some((m) => m.name.toLowerCase() === joinName?.toLowerCase())) {
+        get().addMember(existing.id, joinName, joinPay);
       }
       return existing;
     }
+
+    // Trigger cloud lookup in background if cloud is enabled
+    if (isCloudEnabled()) {
+      get().joinByInviteCodeAsync(normalized, yourName).catch(() => {});
+    }
+
     // Demo: create a local shadow group when code isn’t on this device
     const trip: Trip = {
       id: uid('trip'),
@@ -400,8 +536,13 @@ export const useTripStore = create<TripStore>()(
       purpose: 'Invite',
       currency: DEFAULT_CURRENCY,
       inviteCode: normalized,
-      members: yourName?.trim()
-        ? [{ id: uid('m'), name: yourName.trim() }]
+      members: joinName
+        ? [{
+            id: uid('m'),
+            name: joinName,
+            upiId: joinPay?.rail === 'upi' ? joinPay.handle : undefined,
+            paymentMethods: joinPay ? [joinPay] : undefined,
+          }]
         : [],
       expenses: [],
       paidTransfers: [],
@@ -410,6 +551,127 @@ export const useTripStore = create<TripStore>()(
     };
     set({ trips: [trip, ...get().trips] });
     return trip;
+  },
+
+  joinByInviteCodeAsync: async (code, yourName) => {
+    const normalized = code.trim().toUpperCase();
+    const existing = get().trips.find((t) => t.inviteCode === normalized);
+
+    let joinName = yourName?.trim();
+    let joinPay: PaymentMethod | undefined;
+    let userId: string | undefined;
+
+    try {
+      const { useAuthStore } = require('./auth');
+      const auth = useAuthStore.getState();
+      userId = auth.user?.id;
+      if (!joinName) joinName = auth.name || 'Friend';
+      if (auth.paymentMethods && auth.paymentMethods.length > 0) {
+        joinPay = auth.paymentMethods[0];
+      } else if (auth.upiId) {
+        joinPay = { rail: 'upi', handle: auth.upiId };
+      }
+    } catch {
+      // ignore
+    }
+
+    // 1. If trip exists locally on this device
+    if (existing) {
+      if (joinName && !existing.members.some((m) => m.name.toLowerCase() === joinName?.toLowerCase())) {
+        get().addMember(existing.id, joinName, joinPay);
+      }
+      if (isCloudEnabled() && userId) {
+        try {
+          const { joinTripByCode } = require('@/lib/api/trips');
+          joinTripByCode(normalized, userId).catch(() => {});
+        } catch {
+          // ignore
+        }
+      }
+      return get().trips.find((t) => t.id === existing.id) || existing;
+    }
+
+    // 2. Query cloud if configured
+    if (isCloudEnabled()) {
+      try {
+        const { joinTripByCode } = require('@/lib/api/trips');
+        const { getTripMembers } = require('@/lib/api/members');
+        const { getTripExpenses } = require('@/lib/api/expenses');
+
+        const { trip: cloudTrip, error } = await joinTripByCode(normalized, userId);
+        if (cloudTrip && !error) {
+          const [{ members: cloudMembers }, { expenses: cloudExpenses }] = await Promise.all([
+            getTripMembers(cloudTrip.id).catch(() => ({ members: [] })),
+            getTripExpenses(cloudTrip.id).catch(() => ({ expenses: [] })),
+          ]);
+
+          const syncedTrip = mapCloudTripToLocal(cloudTrip, cloudMembers || [], cloudExpenses || []);
+
+          if (joinName && !syncedTrip.members.some((m) => m.name.toLowerCase() === joinName?.toLowerCase())) {
+            syncedTrip.members.push({
+              id: userId || uid('m'),
+              name: joinName,
+              upiId: joinPay?.rail === 'upi' ? joinPay.handle : undefined,
+              paymentMethods: joinPay ? [joinPay] : undefined,
+            });
+          }
+
+          set({ trips: [syncedTrip, ...get().trips.filter((t) => t.id !== syncedTrip.id)] });
+          return syncedTrip;
+        }
+      } catch (cloudErr) {
+        console.log('[TripStore] Cloud join lookup note:', cloudErr);
+      }
+    }
+
+    // 3. Fallback: local shadow group
+    return get().joinByInviteCode(normalized, yourName);
+  },
+
+  syncTripFromCloud: async (tripId: string) => {
+    if (!isCloudEnabled()) return;
+    try {
+      const { getTrip } = require('@/lib/api/trips');
+      const { getTripMembers } = require('@/lib/api/members');
+      const { getTripExpenses } = require('@/lib/api/expenses');
+
+      const { trip: cloudTrip, error } = await getTrip(tripId);
+      if (error || !cloudTrip) return;
+
+      const [{ members: cloudMembers }, { expenses: cloudExpenses }] = await Promise.all([
+        getTripMembers(tripId).catch(() => ({ members: [] })),
+        getTripExpenses(tripId).catch(() => ({ expenses: [] })),
+      ]);
+
+      const updated = mapCloudTripToLocal(cloudTrip, cloudMembers || [], cloudExpenses || []);
+
+      set((state) => {
+        const existing = state.trips.find((t) => t.id === tripId);
+        if (!existing) return state;
+
+        const mergedMembers = [...updated.members];
+        for (const m of existing.members) {
+          if (!mergedMembers.some((cm) => cm.id === m.id || cm.name === m.name)) {
+            mergedMembers.push(m);
+          }
+        }
+
+        return {
+          trips: state.trips.map((t) =>
+            t.id !== tripId
+              ? t
+              : {
+                  ...updated,
+                  members: mergedMembers,
+                  paidTransfers: existing.paidTransfers,
+                  potCashback: updated.potCashback || existing.potCashback,
+                }
+          ),
+        };
+      });
+    } catch (err) {
+      console.log('[TripStore] syncTripFromCloud note:', err);
+    }
   },
 
   addCashback: (tripId, amount) => {

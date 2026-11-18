@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/store/theme';
 import { SoftCard } from '@/components/SoftCard';
+import { EmptyWallet, CoinStack } from '@/assets/illustrations';
 import { space, type } from '@/theme/tokens';
 
 type EmptyStateType = 
@@ -75,10 +76,20 @@ export function EmptyState({ type, onAction, actionLabel }: Props) {
 
   return (
     <View style={styles.container}>
-      {/* Icon */}
-      <View style={[styles.iconCircle, { backgroundColor: c.fill }]}>
-        <Ionicons name={icon} size={40} color={c.textSecondary} />
-      </View>
+      {/* Custom 3D Illustration or Icon */}
+      {type === 'no-groups' ? (
+        <View style={styles.illustrationWrap}>
+          <EmptyWallet width={110} height={110} />
+        </View>
+      ) : type === 'no-expenses' ? (
+        <View style={styles.illustrationWrap}>
+          <CoinStack width={100} height={100} />
+        </View>
+      ) : (
+        <View style={[styles.iconCircle, { backgroundColor: c.fill }]}>
+          <Ionicons name={icon} size={36} color={c.textSecondary} />
+        </View>
+      )}
 
       {/* Title & Subtitle */}
       <Text style={[styles.title, { color: c.text }]}>{title}</Text>
@@ -130,6 +141,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: space.xxxl,
     paddingHorizontal: space.xl,
+  },
+  illustrationWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: space.lg,
   },
   iconCircle: {
     width: 80,

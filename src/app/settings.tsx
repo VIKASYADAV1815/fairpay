@@ -51,9 +51,9 @@ export default function SettingsScreen() {
                 { color: darkMode ? c.textSecondary : c.accentInk },
               ]}
             >
-              {isLoggedIn
-                ? 'You’re signed in (UI). Backend sync comes later.'
-                : 'Log in or sign up to unlock full setup.'}
+              {isLoggedIn || user
+                ? 'Signed in · Cloud sync & real-time updates active.'
+                : 'Sign in or create an account to sync across devices.'}
             </Text>
             <View style={styles.authRow}>
               {user || isLoggedIn ? (
@@ -73,7 +73,7 @@ export default function SettingsScreen() {
                           style: 'destructive',
                           onPress: async () => {
                             await logout();
-                            router.replace('/(auth)/phone');
+                            router.replace('/');
                           },
                         },
                       ]
@@ -96,7 +96,7 @@ export default function SettingsScreen() {
                       styles.authBtn,
                       { backgroundColor: darkMode ? c.accent : c.accentInk },
                     ]}
-                    onPress={() => router.push('/(auth)/phone')}
+                    onPress={() => router.push('/login')}
                   >
                     <Text
                       style={[
@@ -116,7 +116,7 @@ export default function SettingsScreen() {
                         borderColor: 'rgba(0,0,0,0.08)',
                       },
                     ]}
-                    onPress={() => router.push('/(auth)/phone')}
+                    onPress={() => router.push('/signup')}
                   >
                     <Text style={[styles.authBtnText, { color: '#0A0A0A' }]}>Sign up</Text>
                   </Pressable>
@@ -176,7 +176,7 @@ export default function SettingsScreen() {
 
         {/* Payment Reminders Section */}
         <Text style={[styles.sectionTitle, { color: c.textSecondary, marginTop: space.xl, marginBottom: space.sm }]}>
-          PAYMENT REMINDERS
+          Payment reminders
         </Text>
 
         <SoftCard style={styles.row}>
@@ -205,8 +205,8 @@ export default function SettingsScreen() {
             <Text style={[styles.label, { color: c.text }]}>Remind after</Text>
             <Pressable
               onPress={() => {
-                // Cycle through common values: 24h → 48h → 72h → 0 (disabled)
-                const options = [24, 48, 72, 0];
+                // Cycle through presets: 6h → 12h → 24h → 48h → 72h
+                const options = [6, 12, 24, 48, 72];
                 const currentIndex = options.indexOf(paymentReminderHours);
                 const nextIndex = (currentIndex + 1) % options.length;
                 setPaymentReminderHours(options[nextIndex]);
@@ -221,7 +221,7 @@ export default function SettingsScreen() {
         ) : null}
 
         <Text style={[styles.sectionTitle, { color: c.textSecondary, marginTop: space.xl, marginBottom: space.sm }]}>
-          GENERAL
+          General
         </Text>
 
         {(
@@ -232,17 +232,15 @@ export default function SettingsScreen() {
             { icon: 'link-outline' as const, label: 'Join a group', route: '/join' },
             { icon: 'sparkles-outline' as const, label: 'Welcome tutorial', route: '/onboarding' },
             { icon: 'time-outline' as const, label: 'History', route: '/history' },
-            { icon: 'help-circle-outline' as const, label: 'Help & FAQ', onPress: () => Alert.alert('Help', 'Documentation coming soon. For now, explore the app!') },
-            { icon: 'document-text-outline' as const, label: 'Privacy Policy', onPress: () => Alert.alert('Privacy', 'We store data locally on your device. No data is sent to servers yet. Backend privacy policy will be added when cloud sync launches.') },
-            { icon: 'information-circle-outline' as const, label: 'About Fairpay', onPress: () => Alert.alert('Fairpay v1.0', 'Zero-friction shared money tracking.\n\nBuilt with Expo & React Native.\n\n© 2026 Fairpay') },
+            { icon: 'help-circle-outline' as const, label: 'Help & FAQ', route: '/faq' },
+            { icon: 'document-text-outline' as const, label: 'Privacy Policy', route: '/privacy' },
+            { icon: 'information-circle-outline' as const, label: 'About Fairpay', route: '/about' },
           ] as const
         ).map((r) => (
           <Pressable
             key={r.label}
             onPress={() => {
-              if ('onPress' in r && r.onPress) {
-                r.onPress();
-              } else if ('route' in r && r.route) {
+              if ('route' in r && r.route) {
                 router.push(r.route as any);
               }
             }}

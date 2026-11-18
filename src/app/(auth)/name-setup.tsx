@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { View, Text, TextInput, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { useColors } from '@/store/theme';
 import { useAuthStore } from '@/store/auth';
@@ -28,30 +28,46 @@ export default function ProfileCreationScreen() {
     setLoading(true);
 
     try {
-      const { error } = await supabase
-        .from('users')
-        .insert({
-          id: user.id,
-          phone_number: user.phone,
+      // Only sync to cloud if Supabase is configured and user has a valid UUID
+      const isValidUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (isSupabaseConfigured() && isValidUUID.test(user.id)) {
+        const { error } = await supabase
+          .from('users')
+          .upsert({
+            id: user.id,
+            phone_number: user.phone,
+            name: name.trim(),
+            updated_at: new Date().toISOString(),
+          });
+
+        if (error && error.code !== '23505') {
+          console.warn('Profile creation cloud sync skipped:', error.message);
+        }
+      }
+
+      // Update local auth store with the user's name
+      useAuthStore.getState().updateProfile({ name: name.trim() });
+      if (user) {
+        useAuthStore.getState().setUser({
+          ...user,
           name: name.trim(),
         });
-
-      if (error) throw error;
+      }
 
       // Profile created - now collect payment methods
       router.replace('/(auth)/payment-setup');
     } catch (error: any) {
       console.error('Profile creation error:', error);
       
-      if (error.code === '23505') {
-        // Duplicate key error - profile already exists, go to payment setup
-        router.replace('/(auth)/payment-setup');
-      } else {
-        Alert.alert(
-          'Error',
-          error.message || 'Failed to create profile. Please try again.'
-        );
+      // Update local store anyway so the user is not blocked
+      useAuthStore.getState().updateProfile({ name: name.trim() });
+      if (user) {
+        useAuthStore.getState().setUser({
+          ...user,
+          name: name.trim(),
+        });
       }
+      router.replace('/(auth)/payment-setup');
     } finally {
       setLoading(false);
     }

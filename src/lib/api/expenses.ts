@@ -6,7 +6,6 @@ import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { Database } from '@/lib/supabase';
 
 type Expense = Database['public']['Tables']['expenses']['Row'];
-type ExpenseInsert = Database['public']['Tables']['expenses']['Insert'];
 type ExpenseSplit = Database['public']['Tables']['expense_splits']['Row'];
 type ExpenseSplitInsert = Database['public']['Tables']['expense_splits']['Insert'];
 

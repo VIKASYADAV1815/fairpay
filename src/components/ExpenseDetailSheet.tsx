@@ -10,10 +10,9 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { SoftCard } from '@/components/SoftCard';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import type { Expense, Member } from '@/store/trips';
-import { useColors } from '@/store/theme';
+import { useColors, useThemeStore } from '@/store/theme';
 import { formatMoney } from '@/lib/currency';
 import { radius, space, type } from '@/theme/tokens';
 
@@ -23,11 +22,11 @@ type Props = {
   members: Member[];
   currencySymbol?: string;
   currency?: string;
-  currentUserId?: string; // For showing contextual actions
+  currentUserId?: string;
   onClose: () => void;
   onTogglePaid: (memberId: string) => void;
   onEdit?: () => void;
-  onSendReminder?: (memberId: string) => void; // NEW: Send reminder to specific member
+  onSendReminder?: (memberId: string) => void;
 };
 
 export function ExpenseDetailSheet({
@@ -43,6 +42,7 @@ export function ExpenseDetailSheet({
   onSendReminder,
 }: Props) {
   const c = useColors();
+  const darkMode = useThemeStore((s) => s.darkMode);
 
   if (!expense) return null;
 
@@ -55,7 +55,6 @@ export function ExpenseDetailSheet({
     if (!split) return;
 
     if (!split.isPaid) {
-      // Marking as paid
       Alert.alert(
         'Mark as paid?',
         'Confirm that you have paid your share. The payer will be notified to confirm receipt.',
@@ -68,7 +67,6 @@ export function ExpenseDetailSheet({
         ],
       );
     } else {
-      // Unmarking - only if you're the payer confirming
       if (currentUserId === expense.paidById) {
         Alert.alert(
           'Unmark payment?',
@@ -93,12 +91,13 @@ export function ExpenseDetailSheet({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <View style={[styles.screen, { backgroundColor: c.bgGrouped }]}>
-        <View style={styles.header}>
+      <View style={[styles.screen, { backgroundColor: c.bg }]}>
+        {/* Top Header */}
+        <View style={[styles.header, { borderBottomColor: c.separator }]}>
           <Pressable onPress={onClose} hitSlop={12} style={styles.iconBtn}>
-            <Ionicons name="close" size={22} color={c.text} />
+            <Ionicons name="close" size={24} color={c.text} />
           </Pressable>
-          <Text style={[styles.headerTitle, { color: c.text }]}>Expense details</Text>
+          <Text style={[styles.headerTitle, { color: c.text }]}>Expense Details</Text>
           {onEdit ? (
             <Pressable onPress={onEdit} hitSlop={12} style={styles.iconBtn}>
               <Ionicons name="pencil" size={20} color={c.text} />
@@ -112,211 +111,247 @@ export function ExpenseDetailSheet({
           contentContainerStyle={styles.body}
           showsVerticalScrollIndicator={false}
         >
-          {/* Expense Summary */}
-          <SoftCard tone="accent" style={styles.summaryCard}>
+          {/* Main Hero Card - High Contrast & Modern */}
+          <View
+            style={[
+              styles.summaryCard,
+              {
+                backgroundColor: c.card,
+                borderColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+              },
+            ]}
+          >
             <View style={styles.summaryTop}>
               <View style={{ flex: 1 }}>
-                <Text style={[styles.expenseTitle, { color: c.accentInk }]}>
+                <Text style={[styles.expenseTitle, { color: c.text }]}>
                   {expense.title}
                 </Text>
                 {expense.tag && (
-                  <Text style={[styles.expenseTag, { color: c.accentInk }]}>
-                    {expense.tag}
-                  </Text>
+                  <View style={[styles.tagBadge, { backgroundColor: darkMode ? '#2C2C2E' : '#E5E5EA' }]}>
+                    <Text style={[styles.tagBadgeText, { color: c.textSecondary }]}>
+                      {expense.tag}
+                    </Text>
+                  </View>
                 )}
               </View>
-              <Text style={[styles.expenseAmount, { color: c.accentInk }]}>
+              <Text style={[styles.expenseAmount, { color: c.text }]}>
                 {formatMoney(expense.amount, currency)}
               </Text>
             </View>
+
+            <View style={[styles.summaryDivider, { backgroundColor: c.separator }]} />
+
             <View style={styles.summaryMeta}>
               <View style={styles.metaRow}>
-                <Ionicons name="person" size={14} color={c.accentInk} />
-                <Text style={[styles.metaText, { color: c.accentInk }]}>
-                  Paid by {payer?.name ?? '—'}
+                <Ionicons name="person-circle-outline" size={18} color={c.textSecondary} />
+                <Text style={[styles.metaText, { color: c.textSecondary }]}>
+                  Paid by <Text style={{ color: c.text, fontWeight: '700' }}>{payer?.name ?? 'Someone'}</Text>
                 </Text>
               </View>
               <View style={styles.metaRow}>
-                <Ionicons name="calendar-outline" size={14} color={c.accentInk} />
-                <Text style={[styles.metaText, { color: c.accentInk }]}>
-                  {new Date(expense.createdAt).toLocaleDateString()}
+                <Ionicons name="calendar-outline" size={16} color={c.textSecondary} />
+                <Text style={[styles.metaText, { color: c.textSecondary }]}>
+                  {new Date(expense.createdAt).toLocaleDateString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })}
                 </Text>
               </View>
               {expense.recurring && (
                 <View style={styles.metaRow}>
-                  <Ionicons name="repeat" size={14} color={c.accentInk} />
-                  <Text style={[styles.metaText, { color: c.accentInk }]}>Recurring</Text>
+                  <Ionicons name="repeat" size={16} color={c.textSecondary} />
+                  <Text style={[styles.metaText, { color: c.textSecondary }]}>Recurring</Text>
                 </View>
               )}
             </View>
-          </SoftCard>
+          </View>
 
           {/* Payment Progress */}
-          <View style={styles.progressSection}>
+          <View style={styles.section}>
             <Text style={[styles.sectionLabel, { color: c.textSecondary }]}>
-              Payment Status
+              Payment progress
             </Text>
-            <SoftCard style={styles.progressCard}>
-              <View style={styles.progressBar}>
+            <View style={[styles.progressCard, { backgroundColor: c.card, borderColor: c.separator }]}>
+              <View style={styles.progressHeader}>
+                <Text style={[styles.progressText, { color: c.text }]}>
+                  <Text style={{ fontWeight: '800', color: c.green }}>{paidCount}</Text> of {totalCount} people paid
+                </Text>
+                <Text style={[styles.progressPct, { color: c.textSecondary }]}>
+                  {totalCount > 0 ? Math.round((paidCount / totalCount) * 100) : 0}%
+                </Text>
+              </View>
+              <View style={[styles.progressBar, { backgroundColor: darkMode ? '#3A3A3C' : '#E5E5EA' }]}>
                 <View
                   style={[
                     styles.progressFill,
                     {
-                      backgroundColor: c.accent,
-                      width: `${(paidCount / totalCount) * 100}%`,
+                      backgroundColor: c.green,
+                      width: `${totalCount > 0 ? (paidCount / totalCount) * 100 : 0}%`,
                     },
                   ]}
                 />
               </View>
-              <Text style={[styles.progressText, { color: c.text }]}>
-                {paidCount} of {totalCount} paid
-              </Text>
-            </SoftCard>
+            </View>
           </View>
 
-          {/* Receipt */}
+          {/* Receipt Image if available */}
           {expense.receiptUri && (
-            <View style={styles.receiptSection}>
+            <View style={styles.section}>
               <Text style={[styles.sectionLabel, { color: c.textSecondary }]}>
-                Receipt
+                Attached receipt
               </Text>
               <Pressable
                 onPress={() => {
-                  // TODO: Open full-screen receipt viewer
-                  Alert.alert('Receipt', 'Full screen viewer coming soon');
+                  Alert.alert('Receipt', 'Full-screen viewer');
                 }}
               >
-                <SoftCard style={styles.receiptCard}>
+                <View style={[styles.receiptCard, { backgroundColor: c.card }]}>
                   <Image
                     source={{ uri: expense.receiptUri }}
                     style={styles.receiptImage}
                     resizeMode="cover"
                   />
                   <View style={styles.receiptOverlay}>
-                    <Ionicons name="expand" size={20} color={c.accentInk} />
-                    <Text style={[styles.receiptText, { color: c.accentInk }]}>
-                      Tap to view
-                    </Text>
+                    <Ionicons name="expand" size={18} color="#FFFFFF" />
+                    <Text style={styles.receiptText}>Tap to enlarge</Text>
                   </View>
-                </SoftCard>
+                </View>
               </Pressable>
             </View>
           )}
 
-          {/* Split Details */}
-          <Text style={[styles.sectionLabel, { color: c.textSecondary }]}>
-            Who owes what
-          </Text>
-          {expense.splits.map((split) => {
-            const member = members.find((m) => m.id === split.memberId);
-            if (!member) return null;
+          {/* Split Details Section */}
+          <View style={styles.section}>
+            <Text style={[styles.sectionLabel, { color: c.textSecondary }]}>
+              Split breakdown ({expense.splits.length})
+            </Text>
+            {expense.splits.map((split) => {
+              const member = members.find((m) => m.id === split.memberId);
+              if (!member) return null;
 
-            const isPayer = split.memberId === expense.paidById;
-            const canToggle = !isPayer && (!split.isPaid || currentUserId === expense.paidById);
+              const isPayer = split.memberId === expense.paidById;
+              const canToggle = !isPayer && (!split.isPaid || currentUserId === expense.paidById);
 
-            return (
-              <SoftCard key={split.memberId} style={styles.splitCard}>
-                <View style={styles.splitLeft}>
-                  <View
-                    style={[
-                      styles.splitAvatar,
-                      {
-                        backgroundColor: split.isPaid ? c.accent : c.fillSecondary,
-                      },
-                    ]}
-                  >
-                    <Text
+              return (
+                <View
+                  key={split.memberId}
+                  style={[
+                    styles.splitCard,
+                    {
+                      backgroundColor: c.card,
+                      borderColor: darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+                    },
+                  ]}
+                >
+                  <View style={styles.splitLeft}>
+                    <View
                       style={[
-                        styles.splitAvatarText,
-                        { color: split.isPaid ? c.accentInk : c.text },
+                        styles.splitAvatar,
+                        {
+                          backgroundColor: split.isPaid
+                            ? (darkMode ? 'rgba(52, 199, 89, 0.25)' : '#DCFCE7')
+                            : (darkMode ? '#3A3A3C' : '#F2F2F7'),
+                        },
                       ]}
                     >
-                      {member.name.slice(0, 1).toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.splitName, { color: c.text }]}>
-                      {member.name}
-                      {isPayer && ' (payer)'}
-                    </Text>
-                    <View style={styles.splitStatus}>
-                      {split.isPaid ? (
-                        <>
-                          <Ionicons
-                            name="checkmark-circle"
-                            size={14}
-                            color={c.accent}
-                          />
-                          <Text style={[styles.splitStatusText, { color: c.accent }]}>
-                            {isPayer
-                              ? 'Auto-paid'
-                              : split.paidAt
-                                ? `Paid ${new Date(split.paidAt).toLocaleDateString()}`
+                      <Text
+                        style={[
+                          styles.splitAvatarText,
+                          { color: split.isPaid ? c.green : c.text },
+                        ]}
+                      >
+                        {member.name.slice(0, 1).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.splitName, { color: c.text }]}>
+                        {member.name}
+                        {isPayer && (
+                          <Text style={{ color: c.textSecondary, fontSize: 13, fontWeight: '500' }}>
+                            {' '}(payer)
+                          </Text>
+                        )}
+                      </Text>
+                      <View style={styles.splitStatusBadge}>
+                        {split.isPaid ? (
+                          <View style={[styles.statusPill, { backgroundColor: darkMode ? 'rgba(52, 199, 89, 0.2)' : '#DCFCE7' }]}>
+                            <Ionicons name="checkmark-circle" size={13} color={c.green} />
+                            <Text style={[styles.statusPillText, { color: c.green }]}>
+                              {isPayer
+                                ? 'Covered by payer'
+                                : split.paidAt
+                                ? `Paid on ${new Date(split.paidAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
                                 : 'Paid'}
-                          </Text>
-                        </>
-                      ) : (
-                        <>
-                          <Ionicons name="time-outline" size={14} color={c.textSecondary} />
-                          <Text
-                            style={[styles.splitStatusText, { color: c.textSecondary }]}
-                          >
-                            Pending
-                          </Text>
-                        </>
+                            </Text>
+                          </View>
+                        ) : (
+                          <View style={[styles.statusPill, { backgroundColor: darkMode ? 'rgba(255, 149, 0, 0.2)' : '#FEF3C7' }]}>
+                            <Ionicons name="time-outline" size={13} color="#D97706" />
+                            <Text style={[styles.statusPillText, { color: '#D97706' }]}>
+                              Pending payment
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.splitRight}>
+                    <Text style={[styles.splitAmount, { color: c.text }]}>
+                      {formatMoney(split.amount, currency)}
+                    </Text>
+
+                    <View style={styles.splitActions}>
+                      {canToggle && (
+                        <Pressable
+                          onPress={() => handleTogglePaid(split.memberId)}
+                          style={[
+                            styles.toggleBtn,
+                            {
+                              backgroundColor: split.isPaid
+                                ? (darkMode ? '#3A3A3C' : '#E5E5EA')
+                                : c.accent,
+                            },
+                          ]}
+                        >
+                          <Ionicons
+                            name={split.isPaid ? 'close' : 'checkmark'}
+                            size={16}
+                            color={split.isPaid ? c.text : c.accentInk}
+                          />
+                        </Pressable>
+                      )}
+
+                      {!split.isPaid && currentUserId === expense.paidById && onSendReminder && (
+                        <Pressable
+                          onPress={() => onSendReminder(split.memberId)}
+                          style={[
+                            styles.reminderBtn,
+                            { backgroundColor: darkMode ? '#3A3A3C' : '#E5E5EA' },
+                          ]}
+                        >
+                          <Ionicons name="notifications-outline" size={15} color={c.text} />
+                        </Pressable>
                       )}
                     </View>
                   </View>
                 </View>
-                <View style={styles.splitRight}>
-                  <Text style={[styles.splitAmount, { color: c.text }]}>
-                    {formatMoney(split.amount, currency)}
-                  </Text>
-                  {canToggle && (
-                    <Pressable
-                      onPress={() => handleTogglePaid(split.memberId)}
-                      style={[
-                        styles.toggleBtn,
-                        {
-                          backgroundColor: split.isPaid ? c.fillSecondary : c.accent,
-                        },
-                      ]}
-                    >
-                      <Ionicons
-                        name={split.isPaid ? 'close' : 'checkmark'}
-                        size={16}
-                        color={split.isPaid ? c.text : c.accentInk}
-                      />
-                    </Pressable>
-                  )}
-                  {/* Show reminder button for unpaid members (if payer) */}
-                  {!split.isPaid && currentUserId === expense.paidById && onSendReminder && (
-                    <Pressable
-                      onPress={() => onSendReminder(split.memberId)}
-                      style={[
-                        styles.reminderBtn,
-                        { backgroundColor: c.fillSecondary },
-                      ]}
-                    >
-                      <Ionicons name="notifications-outline" size={16} color={c.text} />
-                    </Pressable>
-                  )}
-                </View>
-              </SoftCard>
-            );
-          })}
+              );
+            })}
+          </View>
 
-          {/* Help Text */}
-          <SoftCard tone="fill" style={{ marginTop: space.xl }}>
+          {/* Informational Footer Note */}
+          <View style={[styles.helpCard, { backgroundColor: c.card, borderColor: c.separator }]}>
+            <Ionicons name="information-circle-outline" size={18} color={c.textSecondary} />
             <Text style={[styles.helpText, { color: c.textSecondary }]}>
-              💡 Tap the checkmark to mark your payment. The payer will be notified to
-              confirm receipt.
+              Tap the checkmark to mark a friend's share as paid. The payer will see a confirmation banner.
             </Text>
-          </SoftCard>
+          </View>
         </ScrollView>
 
-        <View style={styles.footer}>
-          <PrimaryButton label="Close" variant="accent" onPress={onClose} />
+        <View style={[styles.footer, { backgroundColor: c.bg, borderTopColor: c.separator }]}>
+          <PrimaryButton label="Done" variant="accent" onPress={onClose} />
         </View>
       </View>
     </Modal>
@@ -332,83 +367,115 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg,
     paddingTop: space.lg,
     paddingBottom: space.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   iconBtn: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
+    borderRadius: 20,
   },
-  headerTitle: { ...type.headline },
+  headerTitle: {
+    ...type.headline,
+    fontSize: 18,
+  },
   body: {
-    paddingHorizontal: space.xl,
+    paddingHorizontal: space.lg,
+    paddingTop: space.lg,
     paddingBottom: space.xxxl,
   },
   summaryCard: {
+    borderRadius: radius.lg,
+    padding: space.xl,
+    borderWidth: 1,
     marginBottom: space.xl,
   },
   summaryTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: space.sm,
+    gap: space.md,
   },
   expenseTitle: {
     ...type.title2,
+    fontWeight: '800',
+    fontSize: 22,
+    lineHeight: 28,
   },
-  expenseTag: {
-    ...type.footnote,
-    marginTop: 2,
-    opacity: 0.85,
+  tagBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    marginTop: 6,
+  },
+  tagBadgeText: {
+    ...type.caption2,
+    fontWeight: '700',
   },
   expenseAmount: {
-    ...type.title1,
+    ...type.largeTitle,
+    fontSize: 26,
+    fontWeight: '800',
+  },
+  summaryDivider: {
+    height: 1,
+    marginVertical: space.md,
+    opacity: 0.6,
   },
   summaryMeta: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: space.md,
-    marginTop: space.sm,
+    gap: 8,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
   metaText: {
-    ...type.caption1,
-    fontWeight: '700',
+    ...type.footnote,
+    fontSize: 14,
   },
-  progressSection: {
+  section: {
     marginBottom: space.xl,
   },
   sectionLabel: {
-    ...type.footnote,
-    fontWeight: '700',
+    ...type.caption2,
+    fontWeight: '800',
+    letterSpacing: 0.8,
     marginBottom: space.sm,
     marginLeft: 4,
   },
   progressCard: {
+    borderRadius: radius.md,
+    padding: space.md,
+    borderWidth: 1,
     gap: space.sm,
+  },
+  progressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  progressText: {
+    ...type.subheadline,
+    fontSize: 15,
+  },
+  progressPct: {
+    ...type.subheadline,
+    fontWeight: '700',
   },
   progressBar: {
     height: 8,
-    backgroundColor: 'rgba(0,0,0,0.08)',
-    borderRadius: radius.sm,
+    borderRadius: radius.pill,
     overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
-    borderRadius: radius.sm,
-  },
-  progressText: {
-    ...type.subheadline,
-  },
-  receiptSection: {
-    marginBottom: space.xl,
+    borderRadius: radius.pill,
   },
   receiptCard: {
-    padding: 0,
+    borderRadius: radius.md,
     overflow: 'hidden',
     height: 180,
   },
@@ -425,14 +492,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    padding: space.md,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingVertical: space.sm,
+    backgroundColor: 'rgba(0,0,0,0.65)',
   },
   receiptText: {
     ...type.footnote,
+    color: '#FFFFFF',
     fontWeight: '700',
   },
   splitCard: {
+    borderRadius: radius.md,
+    padding: space.md,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -445,36 +516,49 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   splitAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 42,
+    height: 42,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
   splitAvatarText: {
-    ...type.subheadline,
+    ...type.headline,
+    fontWeight: '800',
   },
   splitName: {
-    ...type.subheadline,
+    ...type.headline,
+    fontSize: 16,
   },
-  splitStatus: {
+  splitStatusBadge: {
+    marginTop: 4,
+  },
+  statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 4,
-    flexWrap: 'wrap',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    alignSelf: 'flex-start',
   },
-  splitStatusText: {
-    ...type.caption1,
-    fontSize: 12,
-    fontWeight: '600',
+  statusPillText: {
+    ...type.caption2,
+    fontWeight: '700',
   },
   splitRight: {
     alignItems: 'flex-end',
-    gap: space.sm,
+    gap: 6,
   },
   splitAmount: {
     ...type.headline,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  splitActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   toggleBtn: {
     width: 32,
@@ -490,13 +574,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  helpCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    padding: space.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    marginTop: space.sm,
+  },
   helpText: {
     ...type.caption1,
+    flex: 1,
     lineHeight: 18,
   },
   footer: {
     paddingHorizontal: space.xl,
-    paddingBottom: space.xxxl,
+    paddingBottom: space.xl,
     paddingTop: space.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
 });

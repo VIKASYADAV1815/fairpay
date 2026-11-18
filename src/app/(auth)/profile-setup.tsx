@@ -20,11 +20,11 @@ import { space, type } from '@/theme/tokens';
 export default function ProfileSetupScreen() {
   const insets = useSafeAreaInsets();
   const c = useColors();
-  const { user, session } = useAuthStore();
+  const { session, upiId: existingUpi, name: existingName, phone: existingPhone } = useAuthStore();
 
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [upiId, setUpiId] = useState('');
+  const [name, setName] = useState(existingName || '');
+  const [phone, setPhone] = useState(existingPhone || '');
+  const [upiId, setUpiId] = useState(existingUpi || '');
   const [loading, setLoading] = useState(false);
 
   // Pre-fill from OAuth data
@@ -35,10 +35,11 @@ export default function ProfileSetupScreen() {
         metadata?.full_name ||
         metadata?.name ||
         metadata?.preferred_username ||
+        existingName ||
         ''
       );
     }
-  }, [session]);
+  }, [session, existingName]);
 
   const handleContinue = async () => {
     if (!name.trim()) {
@@ -49,6 +50,10 @@ export default function ProfileSetupScreen() {
     try {
       setLoading(true);
 
+      const payMethods = upiId.trim()
+        ? [{ rail: 'upi' as const, handle: upiId.trim() }]
+        : [];
+
       // Update user profile in database
       const { error } = await supabase
         .from('users')
@@ -57,28 +62,35 @@ export default function ProfileSetupScreen() {
           email: session?.user.email,
           name: name.trim(),
           phone_number: phone.trim() || null,
-          payment_methods: upiId.trim()
-            ? [{ type: 'upi', id: upiId.trim(), primary: true }]
-            : [],
+          payment_methods: payMethods,
           avatar_url: session?.user.user_metadata?.avatar_url || null,
           updated_at: new Date().toISOString(),
         });
 
-      if (error) throw error;
+      if (error) {
+        console.warn('Database sync skipped (offline or not configured):', error.message);
+      }
 
-      // Update local auth store
-      useAuthStore.getState().setUser({
-        id: session?.user.id!,
-        email: session?.user.email!,
+      // Update local auth store so UPI is immediately ready across the app
+      useAuthStore.getState().updateProfile({
         name: name.trim(),
-        avatar: session?.user.user_metadata?.avatar_url,
-        paymentMethods: upiId.trim()
-          ? [{ type: 'upi', id: upiId.trim(), primary: true }]
-          : [],
+        phone: phone.trim(),
+        upiId: upiId.trim(),
+        paymentMethods: payMethods,
       });
 
-      // Navigate to onboarding questions
-      router.replace('/(auth)/questions');
+      if (session?.user) {
+        useAuthStore.getState().setUser({
+          id: session.user.id,
+          email: session.user.email!,
+          name: name.trim(),
+          avatar: session.user.user_metadata?.avatar_url,
+          paymentMethods: payMethods,
+        });
+      }
+
+      // Navigate to onboarding questions or home
+      router.replace('/(auth)/onboarding-questions');
     } catch (error: any) {
       console.error('Profile setup error:', error);
       Alert.alert('Setup failed', error.message || 'Could not save profile');
@@ -89,7 +101,7 @@ export default function ProfileSetupScreen() {
 
   const handleSkip = () => {
     // Skip profile details, go straight to questions
-    router.replace('/(auth)/questions');
+    router.replace('/(auth)/onboarding-questions');
   };
 
   return (

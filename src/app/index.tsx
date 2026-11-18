@@ -18,7 +18,6 @@ import { NewTripSheet } from '@/components/NewTripSheet';
 import { FadeIn } from '@/components/FadeIn';
 import { FairpayLogo } from '@/components/FairpayLogo';
 import { SectionLabel } from '@/components/SectionLabel';
-import { EmptyArt } from '@/components/EmptyArt';
 import { EmptyState } from '@/components/EmptyState';
 import { SyncingBadge } from '@/components/SyncingBadge';
 import { useTripStore, type ExpenseStatus } from '@/store/trips';
@@ -164,14 +163,14 @@ export default function HomeScreen() {
         </FadeIn>
 
         <FadeIn delay={40}>
-          <Text style={[styles.greeting, { color: c.text }]}>
-            {greetingFor(isLoggedIn ? name : 'there')}
-          </Text>
-          <Text style={[styles.greetingSub, { color: c.textSecondary }]}>
-            {isLoggedIn
-              ? 'Here’s your shared money at a glance.'
-              : 'Sign in to personalize Fairpay — or start a group now.'}
-          </Text>
+          <View style={styles.greetingContainer}>
+            <Text style={[styles.greeting, { color: c.text }]}>
+              {greetingFor(isLoggedIn ? name : 'there')}
+            </Text>
+            <Text style={[styles.greetingSub, { color: c.textSecondary }]}>
+              {isLoggedIn ? "Here's your shared money at a glance." : "Sign in to personalize Fairpay — or start a group now."}
+            </Text>
+          </View>
         </FadeIn>
 
         {!isLoggedIn ? (
@@ -251,28 +250,7 @@ export default function HomeScreen() {
             label="New"
             highlight
             delay={100}
-            onPress={() => {
-              // Check if logged in before creating group
-              const user = useAuthStore.getState().user;
-              const isLoggedIn = useAuthStore.getState().isLoggedIn;
-              
-              if (!user && !isLoggedIn) {
-                Alert.alert(
-                  'Sign in Required',
-                  'Please sign in to create groups and sync across devices.',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Sign In',
-                      onPress: () => router.push('/(auth)/phone'),
-                    },
-                  ]
-                );
-                return;
-              }
-              
-              setSheetOpen(true);
-            }}
+            onPress={() => setSheetOpen(true)}
           />
           <ActionTile icon="swap-horizontal-outline" label="Settle" delay={150} onPress={openSettle} />
           <ActionTile icon="time-outline" label="History" delay={200} onPress={() => router.push('/history')} />
@@ -467,7 +445,7 @@ export default function HomeScreen() {
                             : 'ellipse-outline'
                       }
                       size={16}
-                      color={c.accentInk}
+                      color={e.status === 'settled' ? c.accentInk : c.text}
                     />
                   </View>
                   <View style={{ flex: 1 }}>
@@ -512,8 +490,39 @@ const styles = StyleSheet.create({
   },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   headerIcon: { padding: 4 },
-  greeting: { ...type.title2 },
-  greetingSub: { ...type.footnote, marginTop: 4, marginBottom: space.lg },
+  heroCard: {
+    borderRadius: 20,
+    overflow: 'hidden',
+    marginBottom: space.lg,
+    minHeight: 140,
+  },
+  heroContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: space.lg,
+    gap: space.md,
+  },
+  heroIllustration: {
+    opacity: 0.9,
+  },
+  greetingContainer: {
+    paddingTop: space.md,
+    paddingBottom: space.xl,
+    paddingHorizontal: 2,
+  },
+  greeting: {
+    ...type.largeTitle,
+    fontSize: 30,
+    lineHeight: 36,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+  },
+  greetingSub: {
+    ...type.body,
+    fontSize: 15,
+    lineHeight: 22,
+    marginTop: 6,
+  },
   authCard: { marginBottom: space.lg },
   authTitle: { ...type.title3 },
   authBody: { ...type.footnote, marginTop: 4, opacity: 0.85 },
@@ -611,3 +620,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 });
+

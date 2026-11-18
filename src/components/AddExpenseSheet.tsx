@@ -57,6 +57,8 @@ export function AddExpenseSheet({
 }: Props) {
   const c = useColors();
   const isPro = useProStore((s) => s.isPro);
+  const isTripUnlocked = useProStore((s) => s.isTripUnlocked);
+  const hasAccess = isPro || (tripId ? isTripUnlocked(tripId) : false);
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
   const [tag, setTag] = useState('');
@@ -117,10 +119,10 @@ export function AddExpenseSheet({
   };
 
   const scanWithAi = async () => {
-    if (!isPro) {
-      Alert.alert('Fairpay Pro', 'AI receipt scan is a Pro feature (see AI.md).', [
+    if (!hasAccess) {
+      Alert.alert('AI Receipt Scanner', 'Scan bills with a ₹49 Trip Pass or Fairpay Pro.', [
         { text: 'Not now', style: 'cancel' },
-        { text: 'Upgrade', onPress: () => router.push('/pro') },
+        { text: 'View Options', onPress: () => router.push({ pathname: '/pro', params: { tripId } }) },
       ]);
       return;
     }
@@ -132,19 +134,24 @@ export function AddExpenseSheet({
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       quality: 0.7,
+      base64: true,
     });
     if (result.canceled || !result.assets[0]?.uri) return;
     const uri = result.assets[0].uri;
+    const base64 = result.assets[0].base64 || undefined;
     setReceiptUri(uri);
     setAiBusy(true);
-    const out = await scanReceiptToExpense(uri);
+    const out = await scanReceiptToExpense(uri, base64);
     setAiBusy(false);
     if (!out.ok) {
-      Alert.alert('AI coming soon', out.reason);
+      Alert.alert('Scan failed', out.reason);
       return;
     }
     setTitle(out.draft.title);
     setAmount(String(out.draft.amount));
+    if (!tag) {
+      setTag('Food');
+    }
   };
 
   const handleSave = () => {
@@ -287,7 +294,7 @@ export function AddExpenseSheet({
             <Ionicons
               name={recurring ? 'checkmark-circle' : 'ellipse-outline'}
               size={22}
-              color={c.accentInk}
+              color={recurring ? c.green : c.textSecondary}
             />
             <View style={{ flex: 1 }}>
               <Text style={[styles.recurTitle, { color: c.text }]}>Mark as recurring</Text>
@@ -301,7 +308,7 @@ export function AddExpenseSheet({
             onPress={pickReceipt}
             style={[styles.recurRow, { backgroundColor: c.card }]}
           >
-            <Ionicons name="image-outline" size={22} color={c.accentInk} />
+            <Ionicons name="image-outline" size={22} color={c.text} />
             <View style={{ flex: 1 }}>
               <Text style={[styles.recurTitle, { color: c.text }]}>
                 {receiptUri ? 'Receipt attached' : 'Attach receipt'}

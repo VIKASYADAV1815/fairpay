@@ -15,13 +15,13 @@ export default function ScanScreen() {
   const insets = useSafeAreaInsets();
   const c = useColors();
   const [permission, requestPermission] = useCameraPermissions();
-  const joinByInviteCode = useTripStore((s) => s.joinByInviteCode);
+  const joinByInviteCodeAsync = useTripStore((s) => s.joinByInviteCodeAsync);
   const name = useAuthStore((s) => s.name);
   const [scanned, setScanned] = useState(false);
   const lock = useRef(false);
 
   const handleJoin = useCallback(
-    (raw: string) => {
+    async (raw: string) => {
       const code = parseInvitePayload(raw);
       if (!code) {
         Alert.alert('Not a Fairpay invite', 'Scan a Fairpay group QR or code.');
@@ -29,22 +29,28 @@ export default function ScanScreen() {
         setScanned(false);
         return;
       }
-      const trip = joinByInviteCode(code, name || undefined);
-      if (!trip) {
-        Alert.alert('Couldn’t join', 'Try the invite code manually.');
+      try {
+        const trip = await joinByInviteCodeAsync(code, name || undefined);
+        if (!trip) {
+          Alert.alert('Couldn’t join', 'Group not found. Try the invite code manually.');
+          lock.current = false;
+          setScanned(false);
+          return;
+        }
+        Alert.alert('Joined', `You’re in “${trip.name}”`, [
+          {
+            text: 'Open group',
+            onPress: () =>
+              router.replace({ pathname: '/trip/[id]', params: { id: trip.id } }),
+          },
+        ]);
+      } catch (err: any) {
+        Alert.alert('Couldn’t join', err?.message || 'Try the invite code manually.');
         lock.current = false;
         setScanned(false);
-        return;
       }
-      Alert.alert('Joined', `You’re in “${trip.name}”`, [
-        {
-          text: 'Open group',
-          onPress: () =>
-            router.replace({ pathname: '/trip/[id]', params: { id: trip.id } }),
-        },
-      ]);
     },
-    [joinByInviteCode, name],
+    [joinByInviteCodeAsync, name],
   );
 
   const onBarcodeScanned = (result: BarcodeScanningResult) => {

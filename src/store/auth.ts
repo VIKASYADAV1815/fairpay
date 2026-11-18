@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { User, Session } from '@supabase/supabase-js';
+import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import type { CurrencyCode } from '@/lib/currency';
 import { DEFAULT_CURRENCY } from '@/lib/currency';
@@ -14,7 +14,8 @@ type AuthStore = {
   user: {
     id: string;
     email: string;
-    name: string;
+    name?: string;
+    phone?: string;
     avatar?: string;
     paymentMethods?: PaymentMethod[];
   } | null;
@@ -38,7 +39,8 @@ type AuthStore = {
   setUser: (user: {
     id: string;
     email: string;
-    name: string;
+    name?: string;
+    phone?: string;
     avatar?: string;
     paymentMethods?: PaymentMethod[];
   } | null) => void;
@@ -79,13 +81,23 @@ export const useAuthStore = create<AuthStore>()(
       questionsDone: false,
       
       // Set Supabase user
-      setUser: (user) => set({ 
-        user,
-        isLoggedIn: !!user,
-        name: user?.name || '',
-        email: user?.email || '',
-        paymentMethods: user?.paymentMethods || [],
-      }),
+      setUser: (user) =>
+        set((s) => {
+          const upi =
+            user?.paymentMethods?.find((p) => p.rail === 'upi')?.handle || s.upiId;
+          const payMethods =
+            user?.paymentMethods && user.paymentMethods.length > 0
+              ? user.paymentMethods
+              : s.paymentMethods;
+          return {
+            user,
+            isLoggedIn: !!user,
+            name: user?.name || s.name,
+            email: user?.email || s.email,
+            paymentMethods: payMethods,
+            upiId: upi,
+          };
+        }),
       
       // Set Supabase session
       setSession: (session) => set({ session }),
@@ -135,10 +147,21 @@ export const useAuthStore = create<AuthStore>()(
             upiId = data.upiId.trim();
             paymentMethods = fromLegacyUpi(upiId);
           }
+          const updatedName = data.name?.trim() || s.name;
+          const updatedEmail = data.email !== undefined ? data.email.trim() : s.email;
+          const updatedUser = s.user
+            ? {
+                ...s.user,
+                name: updatedName,
+                email: updatedEmail,
+                paymentMethods,
+              }
+            : null;
           return {
-            name: data.name?.trim() || s.name,
+            user: updatedUser,
+            name: updatedName,
             phone: data.phone !== undefined ? data.phone.trim() : s.phone,
-            email: data.email !== undefined ? data.email.trim() : s.email,
+            email: updatedEmail,
             preferredCurrency: data.preferredCurrency ?? s.preferredCurrency,
             upiId,
             paymentMethods,

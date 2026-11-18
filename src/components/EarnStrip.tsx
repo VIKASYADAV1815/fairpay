@@ -2,11 +2,10 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { BeamUnlockButton } from '@/components/BeamUnlockButton';
-import { useProStore } from '@/store/pro';
+import { useProStore, PRO_PRICE_LABEL } from '@/store/pro';
 import { useTripStore } from '@/store/trips';
 import { useColors, useThemeStore } from '@/store/theme';
 import { formatMoney } from '@/lib/currency';
-import { PRO_PRICE_LABEL } from '@/store/pro';
 import { radius, space, type } from '@/theme/tokens';
 
 /** Home earn surface — neutral premium card, thin grey border (no green fill) */
@@ -34,7 +33,7 @@ export function EarnStrip() {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.eyebrow, { color: c.textSecondary }]}>
-            EARN · PRO · DEALS
+            Earn · Pro · Deals
           </Text>
           <Text style={[styles.title, { color: c.text }]}>
             {isPro ? 'Pro active' : `Fairpay Pro · ${PRO_PRICE_LABEL}`}

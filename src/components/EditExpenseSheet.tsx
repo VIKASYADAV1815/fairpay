@@ -295,7 +295,7 @@ export function EditExpenseSheet({
             <Ionicons
               name={recurring ? 'checkmark-circle' : 'ellipse-outline'}
               size={22}
-              color={c.accentInk}
+              color={recurring ? c.green : c.textSecondary}
             />
             <View style={{ flex: 1 }}>
               <Text style={[styles.recurTitle, { color: c.text }]}>Mark as recurring</Text>
@@ -309,7 +309,7 @@ export function EditExpenseSheet({
             onPress={pickReceipt}
             style={[styles.recurRow, { backgroundColor: c.card }]}
           >
-            <Ionicons name="image-outline" size={22} color={c.accentInk} />
+            <Ionicons name="image-outline" size={22} color={c.text} />
             <View style={{ flex: 1 }}>
               <Text style={[styles.recurTitle, { color: c.text }]}>
                 {receiptUri ? 'Receipt attached' : 'Attach receipt'}

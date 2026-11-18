@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { MotiView } from 'moti';
-import { SoftCard } from '@/components/SoftCard';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { FadeIn } from '@/components/FadeIn';
 import { FairpayLogo } from '@/components/FairpayLogo';
@@ -90,7 +89,13 @@ export default function QuestionsScreen() {
         disabled={!selected}
         onPress={next}
       />
-      <Pressable onPress={() => router.replace('/')} style={styles.skip}>
+      <Pressable
+        onPress={() => {
+          completeQuestions();
+          router.replace('/');
+        }}
+        style={styles.skip}
+      >
         <Text style={{ ...type.footnote, color: c.textSecondary }}>Skip for now</Text>
       </Pressable>
     </View>

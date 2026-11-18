@@ -108,19 +108,23 @@ export default function QuestionsScreen() {
         completed_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase
-        .from('users')
-        .update({
-          onboarding_data: onboardingData,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', session?.user.id);
+      if (session?.user?.id) {
+        const { error } = await supabase
+          .from('users')
+          .update({
+            onboarding_data: onboardingData,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', session.user.id);
 
-      if (error) throw error;
+        if (error) {
+          console.warn('Database onboarding sync skipped:', error.message);
+        }
+      }
 
       // Auto-create first group based on use case
       let groupName = 'My Group';
-      const userName = user?.name || 'You';
+      const userName = user?.name || useAuthStore.getState().name || 'You';
 
       switch (useCase) {
         case 'roommates':
@@ -142,6 +146,7 @@ export default function QuestionsScreen() {
 
       // Mark onboarding as done in local store
       useAuthStore.getState().setOnboardingDone(true);
+      useAuthStore.getState().completeQuestions();
 
       // Navigate to the newly created group
       router.replace({
@@ -159,6 +164,7 @@ export default function QuestionsScreen() {
   const handleSkip = () => {
     // Mark onboarding as done without preferences
     useAuthStore.getState().setOnboardingDone(true);
+    useAuthStore.getState().completeQuestions();
     router.replace('/');
   };
 

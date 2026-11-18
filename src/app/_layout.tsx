@@ -9,19 +9,23 @@ import { parseInvitePayload } from '@/lib/invite';
 import { AuthGuard } from '@/components/AuthGuard';
 
 function useInviteDeepLink() {
-  const joinByInviteCode = useTripStore((s) => s.joinByInviteCode);
+  const joinByInviteCodeAsync = useTripStore((s) => s.joinByInviteCodeAsync);
   const name = useAuthStore((s) => s.name);
 
   useEffect(() => {
-    const handle = (url: string | null) => {
+    const handle = async (url: string | null) => {
       if (!url) return;
       
       // Handle invite links
       const code = parseInvitePayload(url);
       if (code) {
-        const trip = joinByInviteCode(code, name || undefined);
-        if (trip) {
-          router.push({ pathname: '/trip/[id]', params: { id: trip.id } });
+        try {
+          const trip = await joinByInviteCodeAsync(code, name || undefined);
+          if (trip) {
+            router.push({ pathname: '/trip/[id]', params: { id: trip.id } });
+          }
+        } catch (e) {
+          console.warn('Failed to join by deep link:', e);
         }
         return;
       }
@@ -55,13 +59,21 @@ function useInviteDeepLink() {
     Linking.getInitialURL().then(handle);
     const sub = Linking.addEventListener('url', (e) => handle(e.url));
     return () => sub.remove();
-  }, [joinByInviteCode, name]);
+  }, [joinByInviteCodeAsync, name]);
 }
 
 export default function RootLayout() {
   const c = useColors();
   const darkMode = useThemeStore((s) => s.darkMode);
+  const { onboardingDone, isLoggedIn } = useAuthStore();
   useInviteDeepLink();
+
+  // Check if user needs to see social login screen
+  useEffect(() => {
+    // If not logged in and onboarding not done, could show social login
+    // But we also allow "Skip" so don't force it
+    // The social login screen will be shown via direct navigation when needed
+  }, [isLoggedIn, onboardingDone]);
 
   return (
     <AuthGuard>
@@ -76,14 +88,15 @@ export default function RootLayout() {
         <Stack.Screen name="index" options={{ animation: 'fade' }} />
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="onboarding" options={{ animation: 'fade' }} />
-        <Stack.Screen name="login" options={{ animation: 'slide_from_bottom' }} />
-        <Stack.Screen name="signup" options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="questions" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen
           name="scan"
           options={{ animation: 'slide_from_bottom', presentation: 'fullScreenModal' }}
         />
         <Stack.Screen name="pro" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
+        <Stack.Screen name="privacy" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="faq" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="about" options={{ animation: 'slide_from_right' }} />
       </Stack>
     </AuthGuard>
   );

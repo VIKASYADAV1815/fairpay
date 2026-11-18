@@ -24,7 +24,8 @@
           "photosPermission": "Allow Fairpay to attach receipt photos to expenses."
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true

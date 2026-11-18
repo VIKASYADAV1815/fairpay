@@ -2,12 +2,12 @@
  * Sync Manager - Handles cloud sync, offline queue, and conflict resolution
  */
 
+import React from 'react';
 import NetInfo from '@react-native-community/netinfo';
 import { isSupabaseConfigured } from './supabase';
 import { processQueue, queueOperation, getQueueSize } from './offline-queue';
 import { createTrip, updateTrip, deleteTrip } from './api/trips';
 import { createExpense, updateExpense, deleteExpense } from './api/expenses';
-import { addTripMember, updateTripMember, removeTripMember } from './api/members';
 import type { Trip } from '@/store/trips';
 
 type SyncStatus = 'idle' | 'syncing' | 'error' | 'offline';
@@ -87,10 +87,12 @@ class SyncManager {
     try {
       this.setStatus('syncing');
 
-      const { trip: cloudTrip, error } = await createTrip({
+      const { error } = await createTrip({
+        id: trip.id,
         name: trip.name,
         purpose: trip.purpose,
         currency: trip.currency,
+        inviteCode: trip.inviteCode,
         userId,
       });
 
@@ -121,7 +123,7 @@ class SyncManager {
     try {
       this.setStatus('syncing');
 
-      const { expense, error } = await createExpense(data);
+      const { error } = await createExpense(data);
 
       if (error) throw error;
 
@@ -158,9 +160,11 @@ class SyncManager {
       await processQueue({
         create_trip: async (data) => {
           await createTrip({
+            id: data.trip.id,
             name: data.trip.name,
             purpose: data.trip.purpose,
             currency: data.trip.currency,
+            inviteCode: data.trip.inviteCode,
             userId: data.userId,
           });
         },
@@ -232,6 +236,3 @@ export function useSyncStatus(): SyncStatus {
 
   return status;
 }
-
-// Note: Need to add React import for hooks
-import React from 'react';

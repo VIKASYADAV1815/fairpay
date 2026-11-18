@@ -16,22 +16,30 @@ import { space, type } from '@/theme/tokens';
 export default function JoinScreen() {
   const insets = useSafeAreaInsets();
   const c = useColors();
-  const joinByInviteCode = useTripStore((s) => s.joinByInviteCode);
+  const joinByInviteCodeAsync = useTripStore((s) => s.joinByInviteCodeAsync);
   const name = useAuthStore((s) => s.name);
   const [code, setCode] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const join = () => {
+  const join = async () => {
     const parsed = parseInvitePayload(code);
     if (!parsed) {
       Alert.alert('Invalid code', 'Enter a 4–8 character Fairpay invite code.');
       return;
     }
-    const trip = joinByInviteCode(parsed, name || undefined);
-    if (!trip) {
-      Alert.alert('Couldn’t join', 'Try again.');
-      return;
+    setLoading(true);
+    try {
+      const trip = await joinByInviteCodeAsync(parsed, name || undefined);
+      if (!trip) {
+        Alert.alert('Couldn’t join', 'Group not found. Check the code and try again.');
+        return;
+      }
+      router.replace({ pathname: '/trip/[id]', params: { id: trip.id } });
+    } catch (err: any) {
+      Alert.alert('Error joining group', err?.message || 'Please check your connection and try again.');
+    } finally {
+      setLoading(false);
     }
-    router.replace({ pathname: '/trip/[id]', params: { id: trip.id } });
   };
 
   return (
@@ -87,13 +95,13 @@ export default function JoinScreen() {
       <View style={{ flex: 1 }} />
 
       <PrimaryButton
-        label="Join group"
+        label={loading ? 'Joining group...' : 'Join group'}
         variant="accent"
-        disabled={code.trim().length < 4}
+        disabled={code.trim().length < 4 || loading}
         onPress={join}
       />
       <Text style={[styles.footnote, { color: c.textTertiary }]}>
-        Codes work on this device now · cloud invites next
+        Instant cross-phone sync · Enter code from another phone or QR
       </Text>
     </View>
   );

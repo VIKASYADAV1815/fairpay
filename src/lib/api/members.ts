@@ -6,7 +6,6 @@ import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { Database } from '@/lib/supabase';
 
 type TripMember = Database['public']['Tables']['trip_members']['Row'];
-type TripMemberInsert = Database['public']['Tables']['trip_members']['Insert'];
 type User = Database['public']['Tables']['users']['Row'];
 
 export type MemberWithUser = TripMember & {
@@ -54,7 +53,9 @@ export async function getTripMembers(tripId: string): Promise<{
  */
 export async function addTripMember(data: {
   tripId: string;
-  userId: string;
+  userId?: string;
+  name?: string;
+  upiId?: string;
   role?: 'admin' | 'member';
   paymentMethods?: any;
 }): Promise<{ member: TripMember | null; error: Error | null }> {
@@ -63,22 +64,39 @@ export async function addTripMember(data: {
   }
 
   try {
-    const { data: member, error } = await supabase
+    const isValidUUID = (str?: string | null) =>
+      str ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str) : false;
+
+    const payload: any = {
+      trip_id: data.tripId,
+      user_id: isValidUUID(data.userId) ? data.userId : null,
+      name: data.name || 'Member',
+      role: data.role || 'member',
+    };
+    if (data.upiId) payload.upi_id = data.upiId;
+    if (data.paymentMethods) payload.payment_methods = data.paymentMethods;
+
+    let res = await supabase
       .from('trip_members')
-      .insert({
-        trip_id: data.tripId,
-        user_id: data.userId,
-        role: data.role || 'member',
-        payment_methods: data.paymentMethods || null,
-      })
+      .insert(payload)
       .select()
       .single();
 
-    if (error) throw error;
+    // If Supabase schema lacks payment_methods column, retry without it
+    if (res.error && res.error.message?.includes('payment_methods')) {
+      delete payload.payment_methods;
+      res = await supabase
+        .from('trip_members')
+        .insert(payload)
+        .select()
+        .single();
+    }
 
-    return { member, error: null };
+    if (res.error) throw res.error;
+
+    return { member: res.data as TripMember, error: null };
   } catch (error) {
-    console.error('Add trip member error:', error);
+    console.log('Add trip member note:', error);
     return { member: null, error: error as Error };
   }
 }

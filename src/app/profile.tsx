@@ -1,21 +1,34 @@
-import { View, Text, StyleSheet, ScrollView, TextInput, Alert, Pressable } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TextInput,
+  Alert,
+  Pressable,
+  Modal,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { SoftCard } from '@/components/SoftCard';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { FadeIn } from '@/components/FadeIn';
 import { FairpayMark } from '@/components/FairpayLogo';
+import { PaymentBrandLogo } from '@/components/PaymentBrandLogo';
 import { useAuthStore } from '@/store/auth';
 import { useTripStore } from '@/store/trips';
-import { useColors } from '@/store/theme';
+import { useColors, useThemeStore } from '@/store/theme';
 import { CURRENCIES, type CurrencyCode } from '@/lib/currency';
 import { PAY_RAILS, type PayRail, type PaymentMethod } from '@/lib/payments';
+import { COUNTRY_CODES, type CountryCode } from '@/lib/countryCodes';
 import { radius, space, type } from '@/theme/tokens';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const c = useColors();
+  const darkMode = useThemeStore((s) => s.darkMode);
   const {
     name: authName,
     phone: authPhone,
@@ -27,33 +40,52 @@ export default function ProfileScreen() {
   const updateMember = useTripStore((s) => s.updateMember);
   const trips = useTripStore((s) => s.trips);
 
+  // Parse phone number into country code + local digits
+  const getInitialPhoneParts = () => {
+    if (!authPhone) return { country: COUNTRY_CODES[0], number: '' };
+    const matched = COUNTRY_CODES.find((country) => authPhone.startsWith(country.dialCode));
+    if (matched) {
+      return {
+        country: matched,
+        number: authPhone.replace(matched.dialCode, '').replace(/[\s-]/g, ''),
+      };
+    }
+    return { country: COUNTRY_CODES[0], number: authPhone.replace(/[\s-]/g, '') };
+  };
+
+  const initial = getInitialPhoneParts();
   const [name, setName] = useState(authName || '');
-  const [phone, setPhone] = useState(authPhone || '');
+  const [selectedCountry, setSelectedCountry] = useState<CountryCode>(initial.country);
+  const [phoneNumber, setPhoneNumber] = useState(initial.number);
+  const [countryPickerVisible, setCountryPickerVisible] = useState(false);
   const [currency, setCurrency] = useState<CurrencyCode>(preferredCurrency);
   const [rail, setRail] = useState<PayRail>(savedMethods[0]?.rail ?? 'upi');
   const [handle, setHandle] = useState(savedMethods[0]?.handle ?? '');
 
   const save = () => {
+    const fullPhone = phoneNumber.trim() ? `${selectedCountry.dialCode} ${phoneNumber.trim()}` : '';
     const methods: PaymentMethod[] = handle.trim()
       ? [{ rail, handle: handle.trim() }]
       : [];
+
     updateProfile({
-      name,
-      phone,
+      name: name.trim(),
+      phone: fullPhone,
       preferredCurrency: currency,
       paymentMethods: methods,
     });
+
     const prev = authName?.trim().toLowerCase();
     if (prev) {
       trips.forEach((t) => {
         t.members.forEach((m) => {
           if (m.name.trim().toLowerCase() === prev) {
-            updateMember(t.id, m.id, { name, paymentMethods: methods });
+            updateMember(t.id, m.id, { name: name.trim(), paymentMethods: methods });
           }
         });
       });
     }
-    Alert.alert('Saved', 'Profile & pay method updated on this device.');
+    Alert.alert('Saved', 'Profile and payment details updated.');
   };
 
   return (
@@ -74,6 +106,7 @@ export default function ProfileScreen() {
           </View>
         </FadeIn>
 
+        {/* Display Name */}
         <Text style={[styles.label, { color: c.textSecondary }]}>Display name</Text>
         <SoftCard tone="fill" style={styles.field}>
           <TextInput
@@ -86,20 +119,38 @@ export default function ProfileScreen() {
           />
         </SoftCard>
 
-        <Text style={[styles.label, { color: c.textSecondary }]}>Phone</Text>
-        <SoftCard tone="fill" style={styles.field}>
-          <TextInput
-            value={phone}
-            onChangeText={setPhone}
-            style={[styles.input, { color: c.text }]}
-            placeholder="+1 / +91 / …"
-            placeholderTextColor={c.textTertiary}
-            keyboardType="phone-pad"
-            selectionColor={c.accent}
-          />
-        </SoftCard>
+        {/* Phone with Country Code Selector */}
+        <Text style={[styles.label, { color: c.textSecondary }]}>Phone number</Text>
+        <View style={styles.phoneRow}>
+          <Pressable
+            onPress={() => setCountryPickerVisible(true)}
+            style={[
+              styles.countrySelector,
+              { backgroundColor: c.card, borderColor: c.separator },
+            ]}
+          >
+            <Text style={styles.countryFlag}>{selectedCountry.flag}</Text>
+            <Text style={[styles.countryDial, { color: c.text }]}>
+              {selectedCountry.dialCode}
+            </Text>
+            <Ionicons name="chevron-down" size={14} color={c.textSecondary} />
+          </Pressable>
 
-        <Text style={[styles.label, { color: c.textSecondary }]}>Preferred currency</Text>
+          <SoftCard tone="fill" style={[styles.field, styles.phoneInputCard]}>
+            <TextInput
+              value={phoneNumber}
+              onChangeText={setPhoneNumber}
+              style={[styles.input, { color: c.text }]}
+              placeholder="9876543210"
+              placeholderTextColor={c.textTertiary}
+              keyboardType="phone-pad"
+              selectionColor={c.accent}
+            />
+          </SoftCard>
+        </View>
+
+        {/* Preferred Currency */}
+        <Text style={[styles.label, { color: c.textSecondary, marginTop: space.sm }]}>Preferred currency</Text>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -124,16 +175,21 @@ export default function ProfileScreen() {
           })}
         </ScrollView>
 
-        <Text style={[styles.label, { color: c.textSecondary, marginTop: space.xl }]}>
-          How you get paid
-        </Text>
-        <Text style={[styles.hintLeft, { color: c.textTertiary }]}>
-          Optional · pick your country rail (UPI, PayPal, Venmo, Pix…)
-        </Text>
+        {/* Payment Rails with Brand Logos */}
+        <View style={styles.paymentSectionHeader}>
+          <Text style={[styles.label, { color: c.textSecondary, marginTop: space.xl, marginBottom: 2 }]}>
+            How you get paid
+          </Text>
+          <Text style={[styles.hintLeft, { color: c.textTertiary }]}>
+            Select your preferred app so group members can settle to you in 1-tap.
+          </Text>
+        </View>
+
+        {/* Payment options carousel with SVG logos */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipRow}
+          contentContainerStyle={[styles.chipRow, { paddingVertical: space.xs }]}
         >
           {PAY_RAILS.map((r) => {
             const on = rail === r.rail;
@@ -142,11 +198,20 @@ export default function ProfileScreen() {
                 key={r.rail}
                 onPress={() => setRail(r.rail)}
                 style={[
-                  styles.chip,
-                  { backgroundColor: on ? c.accent : c.fillSecondary },
+                  styles.paymentRailCard,
+                  {
+                    backgroundColor: on ? (darkMode ? '#1E293B' : '#F0FDF4') : c.card,
+                    borderColor: on ? c.accent : c.separator,
+                  },
                 ]}
               >
-                <Text style={{ color: on ? c.accentInk : c.text, fontWeight: '700' }}>
+                <PaymentBrandLogo brand={r.brand} size={28} />
+                <Text
+                  style={[
+                    styles.paymentRailLabel,
+                    { color: on ? c.text : c.textSecondary, fontWeight: on ? '700' : '500' },
+                  ]}
+                >
                   {r.label}
                 </Text>
               </Pressable>
@@ -154,7 +219,8 @@ export default function ProfileScreen() {
           })}
         </ScrollView>
 
-        <SoftCard tone="fill" style={styles.field}>
+        {/* Handle input */}
+        <SoftCard tone="fill" style={[styles.field, { marginTop: space.sm }]}>
           <TextInput
             value={handle}
             onChangeText={setHandle}
@@ -172,10 +238,54 @@ export default function ProfileScreen() {
         <View style={{ marginTop: space.xxl }}>
           <PrimaryButton label="Save profile" variant="accent" onPress={save} />
           <Text style={[styles.footnote, { color: c.textTertiary }]}>
-            Syncs pay method into matching group members · FX conversion later
+            Syncs your name and payment handle across your active groups
           </Text>
         </View>
       </ScrollView>
+
+      {/* Country Code Picker Modal */}
+      <Modal
+        visible={countryPickerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCountryPickerVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { backgroundColor: c.card }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: c.text }]}>Select Country Code</Text>
+              <Pressable onPress={() => setCountryPickerVisible(false)} hitSlop={10}>
+                <Ionicons name="close" size={24} color={c.textSecondary} />
+              </Pressable>
+            </View>
+
+            <ScrollView style={{ maxHeight: 380 }}>
+              {COUNTRY_CODES.map((item) => (
+                <Pressable
+                  key={`${item.code}-${item.dialCode}`}
+                  style={[
+                    styles.countryItem,
+                    { borderBottomColor: c.separator },
+                    selectedCountry.dialCode === item.dialCode && {
+                      backgroundColor: c.fillSecondary,
+                    },
+                  ]}
+                  onPress={() => {
+                    setSelectedCountry(item);
+                    setCountryPickerVisible(false);
+                  }}
+                >
+                  <Text style={styles.countryItemFlag}>{item.flag}</Text>
+                  <Text style={[styles.countryItemName, { color: c.text }]}>{item.name}</Text>
+                  <Text style={[styles.countryItemDial, { color: c.textSecondary }]}>
+                    {item.dialCode}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -191,17 +301,83 @@ const styles = StyleSheet.create({
     marginBottom: space.sm,
     marginLeft: 4,
   },
-  field: { marginBottom: space.xl, paddingVertical: 4, paddingHorizontal: space.lg },
+  field: { marginBottom: space.lg, paddingVertical: 4, paddingHorizontal: space.lg },
   input: { ...type.title3, paddingVertical: space.lg },
+  phoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginBottom: space.sm,
+  },
+  countrySelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    height: 56,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    marginBottom: space.lg,
+  },
+  countryFlag: { fontSize: 20 },
+  countryDial: { ...type.subheadline, fontWeight: '700' },
+  phoneInputCard: {
+    flex: 1,
+  },
   chipRow: { gap: space.sm, paddingBottom: space.md },
   chip: {
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: radius.pill,
   },
+  paymentSectionHeader: {
+    marginBottom: 4,
+  },
+  paymentRailCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1.5,
+  },
+  paymentRailLabel: {
+    ...type.footnote,
+    fontWeight: '600',
+  },
   footnote: {
     ...type.caption1,
     textAlign: 'center',
     marginTop: space.md,
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: space.xl,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: space.lg,
+  },
+  modalTitle: { ...type.headline, fontSize: 18 },
+  countryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+  },
+  countryItemFlag: { fontSize: 22, marginRight: 12 },
+  countryItemName: { flex: 1, ...type.body, fontWeight: '500' },
+  countryItemDial: { ...type.subheadline, fontWeight: '600' },
 });

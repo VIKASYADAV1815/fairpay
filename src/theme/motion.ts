@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /** Smoother Moti / Reanimated transitions */
 
 export const timing = (duration = 520, delay = 0): any => ({

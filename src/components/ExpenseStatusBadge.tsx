@@ -1,7 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useColors } from '@/store/theme';
 import { type } from '@/theme/tokens';
 
 type PaymentStatus = 'all-paid' | 'partial' | 'pending';
@@ -13,8 +12,6 @@ type Props = {
 };
 
 export function ExpenseStatusBadge({ paidCount, totalCount, size = 'small' }: Props) {
-  const c = useColors();
-  
   const status: PaymentStatus = 
     paidCount === totalCount ? 'all-paid' :
     paidCount > 0 ? 'partial' : 'pending';

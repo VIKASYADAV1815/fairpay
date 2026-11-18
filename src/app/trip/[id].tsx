@@ -15,13 +15,13 @@ import { MotiView } from 'moti';
 import { GiantAmount } from '@/components/GiantAmount';
 import { SoftCard } from '@/components/SoftCard';
 import { FadeIn } from '@/components/FadeIn';
-import { EmptyArt } from '@/components/EmptyArt';
 import { AddCrewSheet } from '@/components/AddCrewSheet';
 import { AddExpenseSheet } from '@/components/AddExpenseSheet';
 import { EditExpenseSheet } from '@/components/EditExpenseSheet';
 import { ExpenseDetailSheet } from '@/components/ExpenseDetailSheet';
 import { ShareGroupSheet } from '@/components/ShareGroupSheet';
 import { PaymentConfirmationBanner } from '@/components/PaymentConfirmationBanner';
+import { UnpaidNudgeBanner } from '@/components/UnpaidNudgeBanner';
 import { ExpenseStatusBadge } from '@/components/ExpenseStatusBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { ExpenseFilters, ExpenseFilterState } from '@/components/ExpenseFilters';
@@ -29,6 +29,7 @@ import { SyncingBadge } from '@/components/SyncingBadge';
 import { useTripStore, type ExpenseStatus, type Expense } from '@/store/trips';
 import { useNotificationStore, PaymentConfirmation } from '@/store/notifications';
 import { useProStore } from '@/store/pro';
+import { useRemindersStore, getOverdueExpenses } from '@/store/reminders';
 import { useAuthStore } from '@/store/auth';
 import { useColors, useThemeStore } from '@/store/theme';
 import { shareTripPdf } from '@/lib/report';
@@ -62,36 +63,39 @@ export default function TripScreen() {
   const toggleExpenseSplit = useTripStore((s) => s.toggleExpenseSplit);
   const removeExpense = useTripStore((s) => s.removeExpense);
   const removeTrip = useTripStore((s) => s.removeTrip);
-  const addCashback = useTripStore((s) => s.addCashback);
   const isPro = useProStore((s) => s.isPro);
+  const isTripUnlocked = useProStore((s) => s.isTripUnlocked);
+  const hasTripAccess = isPro || (trip?.id ? isTripUnlocked(trip.id) : false);
   const addConfirmation = useNotificationStore((s) => s.addConfirmation);
   const removeConfirmation = useNotificationStore((s) => s.removeConfirmation);
   const markSeen = useNotificationStore((s) => s.markSeen);
   
   // Real-time sync: Subscribe to cloud updates
   useEffect(() => {
-    if (!id || !user || !isCloudEnabled()) return;
+    if (!id || !isCloudEnabled()) return;
 
-    console.log('[TripScreen] Setting up real-time subscriptions...');
-    
+    console.log('[TripScreen] Setting up real-time sync for group:', id);
+
+    // Initial fetch to sync any remote changes
+    useTripStore.getState().syncTripFromCloud(id);
+
     // Subscribe to expense changes
     const expenseSub = subscribeToTripExpenses(id, () => {
-      console.log('[TripScreen] Real-time expense update');
-      setRefreshing(false);
+      console.log('[TripScreen] Real-time expense update detected, syncing...');
+      useTripStore.getState().syncTripFromCloud(id);
     });
 
     // Subscribe to member changes
     const membersSub = subscribeToTripMembers(id, () => {
-      console.log('[TripScreen] Real-time member update');
-      setRefreshing(false);
+      console.log('[TripScreen] Real-time member update detected, syncing...');
+      useTripStore.getState().syncTripFromCloud(id);
     });
 
     return () => {
-      console.log('[TripScreen] Cleaning up subscriptions...');
       expenseSub.unsubscribe();
       membersSub.unsubscribe();
     };
-  }, [id, user]);
+  }, [id]);
   
   // Use store getter to avoid selector re-render issues
   const [pendingConfirmations, setPendingConfirmations] = useState<PaymentConfirmation[]>([]);
@@ -120,13 +124,27 @@ export default function TripScreen() {
   });
   const [refreshing, setRefreshing] = useState(false);
 
-  const handleRefresh = useCallback(() => {
+  const paymentReminderHours = useRemindersStore((s) => s.paymentReminderHours);
+  const paymentRemindersEnabled = useRemindersStore((s) => s.paymentRemindersEnabled);
+  const dismissedExpenseNudgeIds = useRemindersStore((s) => s.dismissedExpenseNudgeIds);
+
+  const overdueExpenses = useMemo(() => {
+    if (!trip || !paymentRemindersEnabled) return [];
+    return getOverdueExpenses(
+      trip.expenses,
+      paymentReminderHours,
+      dismissedExpenseNudgeIds,
+      user?.id,
+    );
+  }, [trip?.expenses, paymentReminderHours, paymentRemindersEnabled, dismissedExpenseNudgeIds, user?.id]);
+
+  const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    // Simulate refresh - in real app this would refetch data from backend
-    setTimeout(() => {
-      setRefreshing(false);
-    }, 800);
-  }, []);
+    if (id && isCloudEnabled()) {
+      await useTripStore.getState().syncTripFromCloud(id);
+    }
+    setRefreshing(false);
+  }, [id]);
 
   useEffect(() => {
     if (onboard === '1') {
@@ -210,7 +228,7 @@ export default function TripScreen() {
 
   const total = useMemo(
     () => trip?.expenses.reduce((a, e) => a + e.amount, 0) ?? 0,
-    [trip?.id, trip?.expenses.length], // Depend on ID and length, not array reference
+    [trip?.expenses],
   );
 
   const balances = useMemo(
@@ -223,7 +241,7 @@ export default function TripScreen() {
         return [];
       }
     },
-    [trip?.id, trip?.members.length, trip?.expenses.length], // Depend on lengths, not arrays
+    [trip?.members, trip?.expenses],
   );
 
   const filteredExpenses = useMemo(() => {
@@ -336,11 +354,22 @@ export default function TripScreen() {
   }
 
   const exportReport = async () => {
-    if (!isPro) {
-      Alert.alert('Fairpay Pro', 'PDF reports are a Pro feature.', [
-        { text: 'Not now', style: 'cancel' },
-        { text: 'See Pro', onPress: () => router.push('/pro') },
-      ]);
+    if (!hasTripAccess) {
+      Alert.alert(
+        'Unlock Trip Report',
+        'PDF reports can be unlocked with a ₹49 Trip Pass or Fairpay Pro.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          {
+            text: 'View Options',
+            onPress: () =>
+              router.push({
+                pathname: '/pro',
+                params: { tripId: trip.id },
+              }),
+          },
+        ],
+      );
       return;
     }
     try {
@@ -348,11 +377,6 @@ export default function TripScreen() {
     } catch {
       Alert.alert('Couldn’t export', 'Try again in a moment.');
     }
-  };
-
-  const cycleStatus = (expenseId: string, current?: ExpenseStatus) => {
-    // Legacy function - now opens detail sheet instead
-    setDetailExpense(trip.expenses.find((e) => e.id === expenseId) || null);
   };
 
   const handleToggleSplit = (expenseId: string, memberId: string) => {
@@ -607,6 +631,22 @@ export default function TripScreen() {
           </View>
         )}
 
+        {/* Smart Unpaid Nudge Banners */}
+        {overdueExpenses.length > 0 && (
+          <View style={styles.notificationSection}>
+            {overdueExpenses.map((overdueItem) => (
+              <UnpaidNudgeBanner
+                key={`nudge-${overdueItem.expense.id}`}
+                overdueItem={overdueItem}
+                members={trip.members}
+                tripId={trip.id}
+                tripName={trip.name}
+                currency={trip.currency}
+              />
+            ))}
+          </View>
+        )}
+
         <View style={styles.toolRow}>
           <Pressable
             style={[styles.tool, { backgroundColor: c.accent }]}
@@ -679,7 +719,7 @@ export default function TripScreen() {
                     <Text
                       style={[
                         styles.balNet,
-                        { color: b.net >= 0 ? c.accentInk : c.danger },
+                        { color: b.net >= 0 ? c.green : c.danger },
                       ]}
                     >
                       {b.net >= 0 ? '+' : '−'}
@@ -846,34 +886,36 @@ export default function TripScreen() {
                         <View style={{ flex: 1 }}>
                           {/* Title row with status badge */}
                           <View style={styles.expTitleRow}>
-                            <Text style={[styles.expTitle, { color: c.text, flex: 1 }]}>
+                            <Text style={[styles.expTitle, { color: c.text, flex: 1 }]} numberOfLines={1}>
                               {e.title}
                               {e.tag ? ` · ${e.tag}` : ''}
                             </Text>
                             <ExpenseStatusBadge paidCount={paidCount} totalCount={totalCount} />
                           </View>
                           
-                          {/* Meta row with payer and waiting info */}
+                          {/* Meta row with payer - IMPROVED VISIBILITY */}
                           <View style={styles.expMetaRow}>
-                            <Text style={[styles.expMeta, { color: c.textSecondary }]}>
+                            <Text style={[styles.expMeta, { color: c.text, fontWeight: '600', opacity: 0.7 }]}>
                               {payer?.name ?? '—'} paid
                             </Text>
-                            {unpaidMembers.length > 0 && unpaidMembers.length < totalCount && (
-                              <>
-                                <Text style={[styles.expMetaDot, { color: c.textTertiary }]}> · </Text>
-                                <Text style={[styles.expMetaWaiting, { color: c.textSecondary }]}>
-                                  Waiting for {unpaidMembers.slice(0, 2).join(', ')}
-                                  {unpaidMembers.length > 2 ? ` +${unpaidMembers.length - 2}` : ''}
-                                </Text>
-                              </>
-                            )}
                             {e.receiptUri && (
                               <>
                                 <Text style={[styles.expMetaDot, { color: c.textTertiary }]}> · </Text>
-                                <Ionicons name="image-outline" size={11} color={c.textSecondary} />
+                                <Ionicons name="image-outline" size={12} color={c.textSecondary} />
                               </>
                             )}
                           </View>
+                          
+                          {/* Waiting info row - SEPARATE FOR CLARITY */}
+                          {unpaidMembers.length > 0 && unpaidMembers.length < totalCount && (
+                            <View style={styles.expWaitingRow}>
+                              <Ionicons name="time-outline" size={11} color={c.textSecondary} style={{ marginTop: 1 }} />
+                              <Text style={[styles.expMetaWaiting, { color: c.textSecondary }]}>
+                                Waiting for {unpaidMembers.slice(0, 2).join(', ')}
+                                {unpaidMembers.length > 2 ? ` +${unpaidMembers.length - 2}` : ''}
+                              </Text>
+                            </View>
+                          )}
                           
                           {/* Time row */}
                           <Text style={[styles.expTime, { color: c.textTertiary }]}>
@@ -882,7 +924,7 @@ export default function TripScreen() {
                         </View>
                       </View>
                       <View style={styles.expRight}>
-                        <Text style={[styles.expAmount, { color: c.text }]}>
+                        <Text style={[styles.expAmount, { color: c.text, fontWeight: '700' }]}>
                           {formatMoney(e.amount, trip.currency)}
                         </Text>
                       </View>
@@ -1170,30 +1212,41 @@ const styles = StyleSheet.create({
   },
   expTitle: {
     ...type.subheadline,
+    fontSize: 16,
+    fontWeight: '600',
   },
   expMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    marginBottom: 2,
+    marginBottom: 4,
   },
   expMeta: {
     ...type.caption1,
-    fontWeight: '600',
+    fontSize: 13,
   },
   expMetaDot: {
     ...type.caption1,
   },
+  expWaitingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 3,
+  },
   expMetaWaiting: {
-    ...type.caption1,
+    ...type.caption2,
+    fontSize: 12,
     fontStyle: 'italic',
   },
   expTime: {
     ...type.caption2,
+    fontSize: 11,
     marginTop: 2,
   },
   expAmount: {
     ...type.headline,
+    fontSize: 18,
   },
   fabWrap: { position: 'absolute', right: space.xl },
   fab: {

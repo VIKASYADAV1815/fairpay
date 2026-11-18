@@ -112,7 +112,7 @@ export default function PeopleScreen() {
                     <Text
                       style={[
                         styles.net,
-                        { color: b.net >= 0 ? (darkMode ? c.accent : c.accentInk) : c.danger },
+                        { color: b.net >= 0 ? c.green : c.danger },
                       ]}
                     >
                       {b.net >= 0 ? '+' : '−'}
