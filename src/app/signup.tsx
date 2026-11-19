@@ -80,27 +80,33 @@ export default function SignupScreen() {
 
       if (emailMode === 'signup') {
         const userName = name.trim();
+
+        // Step 1: Create the account (with "Confirm email" disabled in Supabase dashboard,
+        // this won't send any email — we send our own branded OTP below)
         const { error: signUpError } = await supabase.auth.signUp({
           email: cleanEmail,
           password,
           options: {
             data: { name: userName },
+            // Suppress the default confirmation email — we send our own OTP
+            emailRedirectTo: undefined,
           },
         });
 
         if (signUpError) throw signUpError;
 
-        // Ensure unverified session is cleared immediately
+        // Step 2: Sign out the auto-session so user must verify via OTP
         await supabase.auth.signOut();
 
-        // Dispatch 6-digit verification OTP to user email
-        try {
-          await supabase.auth.signInWithOtp({
-            email: cleanEmail,
-            options: { shouldCreateUser: false },
-          });
-        } catch {
-          // ignore if signUp already triggered email confirmation
+        // Step 3: Send a single branded 6-digit OTP via our custom SMTP (Resend/Fairpay)
+        const { error: otpError } = await supabase.auth.signInWithOtp({
+          email: cleanEmail,
+          options: { shouldCreateUser: false },
+        });
+
+        if (otpError) {
+          console.warn('OTP send error:', otpError.message);
+          // Still navigate to verify screen — user can resend from there
         }
 
         router.push({

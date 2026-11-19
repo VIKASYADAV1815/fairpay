@@ -1,14 +1,30 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, StyleSheet, Alert, TouchableOpacity } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  StyleSheet,
+  Alert,
+  TouchableOpacity,
+  Pressable,
+  Platform,
+} from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { PrimaryButton } from '@/components/PrimaryButton';
-import { useColors } from '@/store/theme';
+import { FairpayLogo } from '@/components/FairpayLogo';
+import { useColors, useThemeStore } from '@/store/theme';
 import { useAuthStore } from '@/store/auth';
 
+const OTP_LENGTH = 8;
+
 export default function VerifyOTPScreen() {
-  const { colors } = { colors: useColors() };
+  const c = useColors();
+  const darkMode = useThemeStore((s) => s.darkMode);
+  const insets = useSafeAreaInsets();
   const { phone, email, type, isDemo, name } = useLocalSearchParams<{
     phone?: string;
     email?: string;
@@ -17,35 +33,84 @@ export default function VerifyOTPScreen() {
     name?: string;
   }>();
 
-  const [otp, setOtp] = useState(['', '', '', '', '', '']);
+  const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(''));
   const [loading, setLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(60);
   const inputRefs = useRef<any[]>([]);
 
   const targetIdentifier = email || phone || '';
+  const otpCode = otp.join('');
+  const isComplete = otpCode.length === OTP_LENGTH;
 
   useEffect(() => {
+    setTimeout(() => inputRefs.current[0]?.focus(), 300);
+
     const timer = setInterval(() => {
       setResendTimer((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
 
-    return () => clearInterval(timer);
-  }, []);
+    // Auto-detect authentication if user clicked magic link / confirm email
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
+      if (currentSession?.user && (event === 'SIGNED_IN' || event === 'USER_UPDATED')) {
+        const u = currentSession.user;
+        const resolvedName =
+          name?.trim() ||
+          u.user_metadata?.name ||
+          u.user_metadata?.full_name ||
+          (u.email ? u.email.split('@')[0] : 'User');
 
+        const { data: profile } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', u.id)
+          .maybeSingle();
+
+        const isProfileComplete = Boolean(
+          profile &&
+          profile.name &&
+          profile.payment_methods &&
+          Array.isArray(profile.payment_methods) &&
+          profile.payment_methods.length > 0
+        );
+
+        useAuthStore.getState().setUser({
+          id: u.id,
+          email: u.email || email || '',
+          phone: u.phone || phone,
+          name: resolvedName,
+          paymentMethods: profile?.payment_methods || [],
+        });
+        useAuthStore.getState().setSession(currentSession);
+
+        if (isProfileComplete && type !== 'signup') {
+          useAuthStore.getState().setOnboardingDone(true);
+          useAuthStore.getState().setShowWelcomeModal(false);
+          router.replace('/');
+        } else {
+          useAuthStore.getState().setShowWelcomeModal(false);
+          router.replace('/(auth)/profile-setup');
+        }
+      }
+    });
+
+    return () => {
+      clearInterval(timer);
+      authListener?.subscription?.unsubscribe();
+    };
+  }, [email, phone, name, type]);
+
+  // ── OTP input change & autofill ─────────────────────────────────────
   const handleOtpChange = (value: string, index: number) => {
     if (value.length > 1) {
-      // Handle paste
-      const digits = value.slice(0, 6).split('');
+      // Multi-character input (e.g. system OTP autofill or paste)
+      const cleaned = value.replace(/\D/g, '').slice(0, OTP_LENGTH);
+      const digits = cleaned.split('');
       const newOtp = [...otp];
-      digits.forEach((digit, i) => {
-        if (index + i < 6) {
-          newOtp[index + i] = digit;
-        }
+      digits.forEach((d, i) => {
+        if (index + i < OTP_LENGTH) newOtp[index + i] = d;
       });
       setOtp(newOtp);
-
-      const lastIndex = Math.min(index + digits.length, 5);
-      inputRefs.current[lastIndex]?.focus();
+      inputRefs.current[Math.min(index + digits.length, OTP_LENGTH - 1)]?.focus();
       return;
     }
 
@@ -53,8 +118,7 @@ export default function VerifyOTPScreen() {
     newOtp[index] = value;
     setOtp(newOtp);
 
-    // Auto-focus next input
-    if (value && index < 5) {
+    if (value && index < OTP_LENGTH - 1) {
       inputRefs.current[index + 1]?.focus();
     }
   };
@@ -65,104 +129,92 @@ export default function VerifyOTPScreen() {
     }
   };
 
+  // ── Verification ───────────────────────────────────────────────────
   const handleVerifyOTP = async () => {
-    const otpCode = otp.join('');
-
-    if (otpCode.length !== 6) {
-      Alert.alert('Invalid Code', 'Please enter the complete 6-digit verification code.');
+    if (!isComplete) {
+      Alert.alert('Incomplete Code', `Please enter all ${OTP_LENGTH} digits.`);
       return;
     }
 
     setLoading(true);
 
-    // ── Test / Demo Mode Verification (Strict 123456 check) ──
+    // Demo Mode Handler
     if (isDemo === '1') {
-      if (otpCode !== '123456') {
+      const expectedDemoCode = '12345678';
+      if (otpCode !== expectedDemoCode) {
         setLoading(false);
-        Alert.alert(
-          'Verification Failed',
-          'Incorrect code. In test mode, enter 123456 to verify.',
-        );
-        setOtp(['', '', '', '', '', '']);
+        Alert.alert('Incorrect Code', `In test mode, enter ${expectedDemoCode} to verify.`);
+        setOtp(Array(OTP_LENGTH).fill(''));
         inputRefs.current[0]?.focus();
         return;
       }
 
-      const cleanTarget = (email || phone || 'user').replace(/[^a-zA-Z0-9]/g, '');
       const userEmail = email || `${phone?.replace(/\D/g, '') || 'user'}@fairpay.local`;
       const displayName = name?.trim() || (email ? email.split('@')[0] : 'User');
 
       useAuthStore.getState().setUser({
-        id: `demo_${cleanTarget}`,
+        id: `demo_${(email || phone || 'user').replace(/[^a-zA-Z0-9]/g, '')}`,
         email: userEmail,
         phone: phone || '',
         name: displayName,
       });
-      useAuthStore.getState().updateProfile({
-        name: displayName,
-        email: userEmail,
-        phone: phone || '',
-      });
-
+      useAuthStore.getState().updateProfile({ name: displayName, email: userEmail, phone: phone || '' });
+      useAuthStore.getState().setShowWelcomeModal(false);
       setLoading(false);
-      if (!name && !email) {
-        router.replace('/(auth)/name-setup');
-      } else {
+
+      if (type !== 'signup') {
+        useAuthStore.getState().setOnboardingDone(true);
         router.replace('/');
+      } else {
+        router.replace('/(auth)/profile-setup');
       }
       return;
     }
 
-    // ── Real Supabase Verification ──
+    // Real Supabase Auth
     try {
       let verifiedUser: any = null;
       let session: any = null;
 
       if (email) {
-        // First try the passed type, then fallback to alternate type
         const primaryType = type === 'signup' ? 'signup' : 'email';
-        let verifyResponse = await supabase.auth.verifyOtp({
+        let res = await supabase.auth.verifyOtp({
           email: email.trim().toLowerCase(),
           token: otpCode,
           type: primaryType as any,
         });
 
-        if (verifyResponse.error) {
-          const alternateType = primaryType === 'signup' ? 'email' : 'signup';
-          const altResponse = await supabase.auth.verifyOtp({
+        if (res.error) {
+          const altType = primaryType === 'signup' ? 'email' : 'signup';
+          const altRes = await supabase.auth.verifyOtp({
             email: email.trim().toLowerCase(),
             token: otpCode,
-            type: alternateType as any,
+            type: altType as any,
           });
 
-          if (altResponse.error) {
-            throw verifyResponse.error;
-          }
-          verifyResponse = altResponse;
+          if (altRes.error) throw res.error;
+          res = altRes;
         }
 
-        verifiedUser = verifyResponse.data.user;
-        session = verifyResponse.data.session;
+        verifiedUser = res.data.user;
+        session = res.data.session;
       } else if (phone) {
-        const verifyResponse = await supabase.auth.verifyOtp({
+        const res = await supabase.auth.verifyOtp({
           phone: phone.trim(),
           token: otpCode,
           type: 'sms',
         });
-
-        if (verifyResponse.error) throw verifyResponse.error;
-
-        verifiedUser = verifyResponse.data.user;
-        session = verifyResponse.data.session;
+        if (res.error) throw res.error;
+        verifiedUser = res.data.user;
+        session = res.data.session;
       }
 
       if (verifiedUser) {
-        // Fetch or sync public.users profile
         const { data: profile } = await supabase
           .from('users')
           .select('*')
           .eq('id', verifiedUser.id)
-          .single();
+          .maybeSingle();
 
         const resolvedName =
           name?.trim() ||
@@ -170,89 +222,93 @@ export default function VerifyOTPScreen() {
           verifiedUser.user_metadata?.name ||
           (email ? email.split('@')[0] : 'User');
 
-        try {
-          await supabase.from('users').upsert({
-            id: verifiedUser.id,
-            email: verifiedUser.email || email || '',
-            phone_number: verifiedUser.phone || phone || '',
-            name: resolvedName,
-            updated_at: new Date().toISOString(),
-          });
-        } catch {
-          // ignore upsert errors if public table is not fully writable
-        }
+        const isProfileComplete = Boolean(
+          profile &&
+          profile.name &&
+          profile.payment_methods &&
+          Array.isArray(profile.payment_methods) &&
+          profile.payment_methods.length > 0
+        );
 
         useAuthStore.getState().setUser({
           id: verifiedUser.id,
           email: verifiedUser.email || email || '',
           phone: verifiedUser.phone || phone,
           name: resolvedName,
+          paymentMethods: profile?.payment_methods || [],
         });
         useAuthStore.getState().setSession(session);
         useAuthStore.getState().updateProfile({
           name: resolvedName,
           email: verifiedUser.email || email || '',
           phone: verifiedUser.phone || phone || '',
+          paymentMethods: profile?.payment_methods || [],
         });
 
-        if (!profile && !name) {
-          router.replace('/(auth)/name-setup');
-        } else {
+        if (isProfileComplete && type !== 'signup') {
+          // Existing user login: bypass onboarding & do NOT show welcome modal
+          useAuthStore.getState().setOnboardingDone(true);
+          useAuthStore.getState().setShowWelcomeModal(false);
           router.replace('/');
+        } else {
+          // New registration or incomplete profile: guide to profile & settlements setup
+          useAuthStore.getState().setShowWelcomeModal(false);
+          router.replace('/(auth)/profile-setup');
         }
       }
     } catch (error: any) {
       console.warn('Verify error:', error?.message || error);
-      const isNetworkIssue =
+      const isNetwork =
         error?.message?.includes('hostname') ||
         error?.message?.includes('fetch failed') ||
         error?.message?.includes('Network request failed');
 
-      if (isNetworkIssue) {
-        Alert.alert(
-          'Database Offline',
-          'Could not reach database to verify code. Continue in Demo Mode?',
-          [
-            { text: 'Retry', style: 'cancel' },
-            {
-              text: 'Continue in Demo',
-              onPress: () => {
-                const displayName = name?.trim() || (email ? email.split('@')[0] : 'User');
-                useAuthStore.getState().setUser({
-                  id: 'demo_user_local',
-                  email: email || `${phone?.replace(/\D/g, '') || 'user'}@fairpay.local`,
-                  phone: phone || '',
-                  name: displayName,
-                });
+      if (isNetwork) {
+        Alert.alert('Connection Error', 'Could not reach Supabase. Continue in offline demo mode?', [
+          { text: 'Retry', style: 'cancel' },
+          {
+            text: 'Continue in Demo',
+            onPress: () => {
+              const displayName = name?.trim() || (email ? email.split('@')[0] : 'User');
+              useAuthStore.getState().setUser({
+                id: 'demo_user_local',
+                email: email || 'user@fairpay.local',
+                phone: phone || '',
+                name: displayName,
+              });
+              useAuthStore.getState().setShowWelcomeModal(false);
+              if (type !== 'signup') {
+                useAuthStore.getState().setOnboardingDone(true);
                 router.replace('/');
-              },
+              } else {
+                router.replace('/(auth)/profile-setup');
+              }
             },
-          ],
-        );
+          },
+        ]);
       } else {
         Alert.alert(
           'Verification Failed',
-          error?.message || 'Invalid 6-digit code. Please check and try again.',
+          error?.message || `Invalid ${OTP_LENGTH}-digit code. Check your email or tap "Resend code".`,
         );
       }
-
-      setOtp(['', '', '', '', '', '']);
+      setOtp(Array(OTP_LENGTH).fill(''));
       inputRefs.current[0]?.focus();
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Resend Code ────────────────────────────────────────────────────
   const handleResendOTP = async () => {
     if (resendTimer > 0) return;
-
     setLoading(true);
 
     try {
       if (isDemo === '1') {
-        Alert.alert('Demo Code', 'Your test verification code is 123456');
+        Alert.alert('Demo Code', 'Your test verification code is 12345678');
         setResendTimer(60);
-        setOtp(['', '', '', '', '', '']);
+        setOtp(Array(OTP_LENGTH).fill(''));
         inputRefs.current[0]?.focus();
         return;
       }
@@ -262,102 +318,120 @@ export default function VerifyOTPScreen() {
           email: email.trim().toLowerCase(),
         });
         if (error) throw error;
-        Alert.alert('Code Sent', `A new 6-digit verification code has been sent to ${email}`);
       } else if (phone) {
-        const { error } = await supabase.auth.signInWithOtp({
-          phone: phone.trim(),
-        });
+        const { error } = await supabase.auth.signInWithOtp({ phone: phone.trim() });
         if (error) throw error;
-        Alert.alert('Code Sent', `A new 6-digit verification code has been sent to ${phone}`);
       }
 
       setResendTimer(60);
-      setOtp(['', '', '', '', '', '']);
+      setOtp(Array(OTP_LENGTH).fill(''));
       inputRefs.current[0]?.focus();
+      Alert.alert('Code Dispatched', `A fresh ${OTP_LENGTH}-digit code was sent to ${targetIdentifier}`);
     } catch (error: any) {
-      console.error('Resend error:', error);
-      Alert.alert('Error', error.message || 'Failed to resend code');
+      Alert.alert('Resend Failed', error.message || 'Unable to resend. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <StatusBar style="auto" />
+  const maskedTarget = email
+    ? email.replace(/(.{2}).+(@.+)/, '$1•••$2')
+    : phone
+      ? phone.slice(0, -4).replace(/\d/g, '•') + phone.slice(-4)
+      : targetIdentifier;
 
-      <View style={styles.content}>
-        <View style={styles.header}>
-          <Text style={[styles.title, { color: colors.text }]}>
-            Enter verification code
+  return (
+    <View style={[styles.screen, { backgroundColor: c.bg }]}>
+      <StatusBar style={darkMode ? 'light' : 'dark'} />
+
+      {/* Navigation Bar */}
+      <View style={[styles.nav, { paddingTop: insets.top + 8 }]}>
+        <Pressable onPress={() => router.back()} hitSlop={14} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={22} color={c.textSecondary} />
+        </Pressable>
+        <FairpayLogo width={105} />
+        <View style={{ width: 36 }} />
+      </View>
+
+      <View style={styles.body}>
+        {/* Header Block with Apple SF Pro Thin Display Typography */}
+        <View style={styles.titleBlock}>
+          <Text style={[styles.heading, { color: c.text }]}>Enter verification code</Text>
+          <Text style={[styles.hint, { color: c.textSecondary }]}>
+            An 8-digit security code was dispatched to
           </Text>
-          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-            We sent a 6-digit code to
-          </Text>
-          <Text style={[styles.phone, { color: colors.text }]}>
-            {targetIdentifier}
-          </Text>
-          {isDemo === '1' && (
-            <View style={[styles.demoBadge, { backgroundColor: colors.card, borderColor: colors.separator }]}>
-              <Text style={[styles.demoBadgeText, { color: colors.textSecondary }]}>
-                Test Mode: Use code <Text style={{ color: colors.text, fontWeight: '700' }}>123456</Text>
-              </Text>
-            </View>
-          )}
+          <Text style={[styles.target, { color: c.text }]}>{maskedTarget}</Text>
         </View>
 
-        <View style={styles.otpContainer}>
-          {otp.map((digit, index) => (
+        {/* 8-Digit OTP Input Boxes */}
+        <View style={styles.otpRow}>
+          {otp.map((digit, i) => (
             <TextInput
-              key={index}
-              ref={(ref) => {
-                inputRefs.current[index] = ref;
+              key={i}
+              ref={(r) => {
+                inputRefs.current[i] = r;
               }}
               style={[
-                styles.otpInput,
+                styles.otpBox,
                 {
-                  backgroundColor: colors.card,
-                  color: colors.text,
-                  borderColor: digit ? colors.accent : colors.separator,
+                  backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7',
+                  color: c.text,
+                  borderColor: digit ? c.accent : 'transparent',
                 },
               ]}
               value={digit}
-              onChangeText={(value) => handleOtpChange(value, index)}
-              onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, index)}
+              onChangeText={(v) => handleOtpChange(v, i)}
+              onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, i)}
               keyboardType="number-pad"
-              maxLength={1}
+              maxLength={OTP_LENGTH}
               selectTextOnFocus
+              textContentType="oneTimeCode"
+              autoComplete={Platform.OS === 'android' ? 'sms-otp' : 'one-time-code'}
             />
           ))}
         </View>
 
-        <PrimaryButton
-          label={loading ? 'Verifying...' : 'Verify & Continue'}
-          onPress={handleVerifyOTP}
-          disabled={loading || otp.join('').length !== 6}
-          style={styles.button}
-        />
+        {/* Demo Mode Badge */}
+        {isDemo === '1' && (
+          <View style={[styles.demoBadge, { backgroundColor: darkMode ? '#1C1C1E' : '#F2F2F7' }]}>
+            <Text style={[styles.demoTxt, { color: c.textSecondary }]}>
+              Test mode · enter{' '}
+              <Text style={{ color: c.text, fontWeight: '500' }}>12345678</Text>
+            </Text>
+          </View>
+        )}
 
-        <View style={styles.resendContainer}>
+        {/* Verify CTA */}
+        <View style={{ marginTop: 32 }}>
+          <PrimaryButton
+            label={loading ? 'Verifying…' : 'Continue'}
+            onPress={handleVerifyOTP}
+            disabled={loading || !isComplete}
+            variant="accent"
+          />
+        </View>
+
+        {/* Resend Timer / Action */}
+        <View style={styles.resendRow}>
           {resendTimer > 0 ? (
-            <Text style={[styles.resendText, { color: colors.textSecondary }]}>
-              Resend code in {resendTimer}s
+            <Text style={[styles.resendCool, { color: c.textTertiary }]}>
+              Resend code in{' '}
+              <Text style={{ color: c.textSecondary, fontVariant: ['tabular-nums'], fontWeight: '400' }}>
+                {resendTimer}s
+              </Text>
             </Text>
           ) : (
-            <TouchableOpacity onPress={handleResendOTP} disabled={loading}>
-              <Text style={[styles.resendButton, { color: colors.accent }]}>
-                Resend Code
-              </Text>
+            <TouchableOpacity onPress={handleResendOTP} disabled={loading} hitSlop={10}>
+              <Text style={[styles.resendLink, { color: c.text }]}>Resend verification code</Text>
             </TouchableOpacity>
           )}
         </View>
 
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.changeNumber}
-        >
-          <Text style={[styles.changeNumberText, { color: colors.textSecondary }]}>
-            Wrong {email ? 'email address' : 'number'}? Change it
+        {/* Change Destination Link */}
+        <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={styles.changeRow}>
+          <Text style={[styles.changeTxt, { color: c.textTertiary }]}>
+            Wrong {email ? 'email address' : 'phone number'}?{' '}
+            <Text style={{ color: c.textSecondary, fontWeight: '400' }}>Change</Text>
           </Text>
         </TouchableOpacity>
       </View>
@@ -366,75 +440,104 @@ export default function VerifyOTPScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 80,
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: 40,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    marginBottom: 10,
-  },
-  subtitle: {
-    fontSize: 15,
-    marginBottom: 4,
-  },
-  phone: {
-    fontSize: 17,
-    fontWeight: '600',
-  },
-  demoBadge: {
-    marginTop: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  demoBadgeText: {
-    fontSize: 12,
-  },
-  otpContainer: {
+  screen: { flex: 1 },
+
+  nav: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 32,
-    gap: 8,
-  },
-  otpInput: {
-    flex: 1,
-    height: 60,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    fontSize: 22,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  button: {
-    marginBottom: 24,
-  },
-  resendContainer: {
     alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+  },
+  backBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  body: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 36,
+  },
+
+  titleBlock: {
+    marginBottom: 36,
+  },
+  heading: {
+    fontSize: 27,
+    fontWeight: '300', // Thin Apple SF Pro Display typography
+    letterSpacing: -0.7,
+    marginBottom: 8,
+  },
+  hint: {
+    fontSize: 14.5,
+    fontWeight: '400',
+    lineHeight: 20,
+    marginBottom: 2,
+    letterSpacing: -0.1,
+  },
+  target: {
+    fontSize: 15,
+    fontWeight: '500',
+    letterSpacing: -0.1,
+  },
+
+  otpRow: {
+    flexDirection: 'row',
+    gap: 6,
     marginBottom: 16,
   },
-  resendText: {
-    fontSize: 14,
+  otpBox: {
+    flex: 1,
+    height: 52,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    fontSize: 19,
+    fontWeight: '300', // Refined thin numeric typography
+    textAlign: 'center',
+    letterSpacing: -0.5,
   },
-  resendButton: {
-    fontSize: 15,
-    fontWeight: '600',
+
+  demoBadge: {
+    marginTop: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
   },
-  changeNumber: {
+  demoTxt: {
+    fontSize: 12,
+    fontWeight: '400',
+    letterSpacing: -0.1,
+  },
+
+  resendRow: {
     alignItems: 'center',
-    padding: 12,
+    marginTop: 24,
   },
-  changeNumberText: {
+  resendCool: {
+    fontSize: 13.5,
+    fontWeight: '400',
+    letterSpacing: -0.1,
+  },
+  resendLink: {
     fontSize: 14,
+    fontWeight: '400',
+    letterSpacing: -0.1,
+    textDecorationLine: 'underline',
+  },
+
+  changeRow: {
+    alignItems: 'center',
+    marginTop: 14,
+    paddingVertical: 6,
+  },
+  changeTxt: {
+    fontSize: 13,
+    fontWeight: '400',
+    letterSpacing: -0.1,
   },
 });

@@ -7,394 +7,676 @@ import {
   Pressable,
   ScrollView,
   Alert,
-  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Modal,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useColors } from '@/store/theme';
+import { useColors, useThemeStore } from '@/store/theme';
 import { useAuthStore } from '@/store/auth';
-import { supabase } from '@/lib/supabase';
-import { space, type } from '@/theme/tokens';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { FairpayLogo } from '@/components/FairpayLogo';
+import { PrimaryButton } from '@/components/PrimaryButton';
+import { PaymentBrandLogo, type BrandType } from '@/components/PaymentBrandLogo';
+import { COUNTRY_CODES, type CountryCode } from '@/lib/countryCodes';
+import { CURRENCIES, type CurrencyCode } from '@/lib/currency';
+import { space } from '@/theme/tokens';
+
+const PAYMENT_RAILS: { rail: 'upi' | 'phonepe' | 'gpay' | 'paytm'; label: string; placeholder: string; brand: BrandType }[] = [
+  { rail: 'upi', label: 'Any UPI', placeholder: 'yourname@okhdfcbank or 9876543210@upi', brand: 'upi' },
+  { rail: 'phonepe', label: 'PhonePe', placeholder: '9876543210@ybl', brand: 'phonepe' },
+  { rail: 'gpay', label: 'Google Pay', placeholder: 'name@okaxis or name@oksbi', brand: 'gpay' },
+  { rail: 'paytm', label: 'Paytm UPI', placeholder: '9876543210@paytm', brand: 'paytm' },
+];
 
 export default function ProfileSetupScreen() {
   const insets = useSafeAreaInsets();
   const c = useColors();
-  const { session, upiId: existingUpi, name: existingName, phone: existingPhone } = useAuthStore();
+  const darkMode = useThemeStore((s) => s.darkMode);
+  const { session, user, upiId: existingUpi, name: existingName, phone: existingPhone, email: existingEmail, preferredCurrency } = useAuthStore();
 
-  const [name, setName] = useState(existingName || '');
-  const [phone, setPhone] = useState(existingPhone || '');
-  const [upiId, setUpiId] = useState(existingUpi || '');
+  const authenticatedEmail = session?.user?.email || user?.email || existingEmail || '';
+  const authenticatedPhone = session?.user?.phone || user?.phone || existingPhone || '';
+
+  const isEmailAuth = Boolean(authenticatedEmail);
+
+  // Form State
+  const [name, setName] = useState(existingName || session?.user?.user_metadata?.name || '');
+  const [complementaryPhone, setComplementaryPhone] = useState(existingPhone.replace(/^\+91/, '').trim());
+  const [complementaryEmail, setComplementaryEmail] = useState(authenticatedEmail || '');
+  const [selectedCountry, setSelectedCountry] = useState<CountryCode>(COUNTRY_CODES[0]);
+  const [countryPickerVisible, setCountryPickerVisible] = useState(false);
+
+  // Settlement Rail State
+  const [selectedRail, setSelectedRail] = useState<'upi' | 'phonepe' | 'gpay' | 'paytm'>('upi');
+  const [handle, setHandle] = useState(existingUpi || '');
+  const [currency, setCurrency] = useState<CurrencyCode>(preferredCurrency || 'INR');
   const [loading, setLoading] = useState(false);
 
-  // Pre-fill from OAuth data
   useEffect(() => {
     if (session?.user) {
-      const metadata = session.user.user_metadata;
-      setName(
-        metadata?.full_name ||
-        metadata?.name ||
-        metadata?.preferred_username ||
-        existingName ||
-        ''
-      );
+      const meta = session.user.user_metadata;
+      if (!name) {
+        setName(meta?.full_name || meta?.name || meta?.preferred_username || '');
+      }
     }
-  }, [session, existingName]);
+  }, [session, name]);
 
+  // ── Pre-flight Collision Check & Submission ─────────────────────────
   const handleContinue = async () => {
-    if (!name.trim()) {
-      Alert.alert('Name required', 'Please enter your name');
+    const cleanName = name.trim();
+    if (!cleanName) {
+      Alert.alert('Name Required', 'Please enter your full name to continue.');
       return;
     }
 
+    const currentUserId = session?.user?.id || user?.id;
+
+    // Contact resolution
+    const finalEmail = (isEmailAuth ? authenticatedEmail : complementaryEmail.trim().toLowerCase()) || null;
+    const rawPhoneDigits = complementaryPhone.replace(/\D/g, '');
+    const finalPhone = (isEmailAuth && rawPhoneDigits.length >= 10
+      ? `${selectedCountry.dialCode}${rawPhoneDigits}`
+      : authenticatedPhone) || null;
+
+    if (!isEmailAuth && complementaryEmail.trim() && !complementaryEmail.includes('@')) {
+      Alert.alert('Invalid Email', 'Please enter a valid email address.');
+      return;
+    }
+
+    setLoading(true);
+
     try {
-      setLoading(true);
+      // ── Collision Check in Supabase ─────────────────────────────────
+      if (isSupabaseConfigured() && currentUserId) {
+        // 1. If user supplied a phone number, ensure it isn't claimed by another account
+        if (finalPhone) {
+          const { data: phoneConflict } = await supabase
+            .from('users')
+            .select('id, name, email')
+            .eq('phone_number', finalPhone)
+            .neq('id', currentUserId)
+            .maybeSingle();
 
-      const payMethods = upiId.trim()
-        ? [{ rail: 'upi' as const, handle: upiId.trim() }]
-        : [];
+          if (phoneConflict) {
+            setLoading(false);
+            Alert.alert(
+              'Account Already Exists',
+              `The phone number ${finalPhone} is already linked to an existing account (${phoneConflict.email || phoneConflict.name || 'Fairpay User'}).\n\nPlease log in using that account to prevent fragmented trips and balances.`,
+              [
+                { text: 'Edit Number', style: 'cancel' },
+                {
+                  text: 'Log In',
+                  onPress: () => router.replace('/login'),
+                },
+              ],
+            );
+            return;
+          }
+        }
 
-      // Update user profile in database
-      const { error } = await supabase
-        .from('users')
-        .upsert({
-          id: session?.user.id,
-          email: session?.user.email,
-          name: name.trim(),
-          phone_number: phone.trim() || null,
+        // 2. If user supplied an email, ensure it isn't claimed by another account
+        if (finalEmail) {
+          const { data: emailConflict } = await supabase
+            .from('users')
+            .select('id, name, phone_number')
+            .eq('email', finalEmail)
+            .neq('id', currentUserId)
+            .maybeSingle();
+
+          if (emailConflict) {
+            setLoading(false);
+            Alert.alert(
+              'Account Already Exists',
+              `The email address ${finalEmail} is already linked to an existing Fairpay account.\n\nPlease log in with your email to access all your trips and balances.`,
+              [
+                { text: 'Edit Email', style: 'cancel' },
+                {
+                  text: 'Log In',
+                  onPress: () => router.replace('/login'),
+                },
+              ],
+            );
+            return;
+          }
+        }
+
+        // 3. Upsert into public.users with payment methods
+        const payMethods = handle.trim()
+          ? [{ rail: selectedRail, handle: handle.trim() }]
+          : [];
+
+        const { error: upsertErr } = await supabase.from('users').upsert({
+          id: currentUserId,
+          name: cleanName,
+          email: finalEmail,
+          phone_number: finalPhone,
           payment_methods: payMethods,
-          avatar_url: session?.user.user_metadata?.avatar_url || null,
           updated_at: new Date().toISOString(),
         });
 
-      if (error) {
-        console.warn('Database sync skipped (offline or not configured):', error.message);
+        if (upsertErr) {
+          console.warn('Profile upsert warning:', upsertErr.message);
+        }
       }
 
-      // Update local auth store so UPI is immediately ready across the app
+      // Update local Zustand store
+      const payMethods = handle.trim()
+        ? [{ rail: selectedRail, handle: handle.trim() }]
+        : [];
+
       useAuthStore.getState().updateProfile({
-        name: name.trim(),
-        phone: phone.trim(),
-        upiId: upiId.trim(),
+        name: cleanName,
+        email: finalEmail || '',
+        phone: finalPhone || '',
+        upiId: handle.trim(),
         paymentMethods: payMethods,
+        preferredCurrency: currency,
       });
 
-      if (session?.user) {
+      if (user) {
         useAuthStore.getState().setUser({
-          id: session.user.id,
-          email: session.user.email!,
-          name: name.trim(),
-          avatar: session.user.user_metadata?.avatar_url,
+          ...user,
+          name: cleanName,
+          email: finalEmail || user.email,
+          phone: finalPhone || user.phone,
           paymentMethods: payMethods,
         });
       }
 
-      // Navigate to onboarding questions or home
-      router.replace('/(auth)/onboarding-questions');
-    } catch (error: any) {
-      console.error('Profile setup error:', error);
-      Alert.alert('Setup failed', error.message || 'Could not save profile');
+      // Proceed to Step 2: Onboarding Questions & Starter Group
+      router.push('/(auth)/onboarding-questions');
+    } catch (err: any) {
+      console.warn('Profile setup exception:', err);
+      // Still allow progression if network glitch
+      router.push('/(auth)/onboarding-questions');
     } finally {
       setLoading(false);
     }
   };
 
   const handleSkip = () => {
-    // Skip profile details, go straight to questions
-    router.replace('/(auth)/onboarding-questions');
+    router.push('/(auth)/onboarding-questions');
   };
 
   return (
-    <View
-      style={[
-        styles.container,
-        {
-          backgroundColor: c.bg,
-          paddingTop: insets.top + space.lg,
-        },
-      ]}
+    <KeyboardAvoidingView
+      style={[styles.screen, { backgroundColor: c.bg }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {/* Header */}
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12}>
-          <Ionicons name="chevron-back" size={24} color={c.text} />
-        </Pressable>
-        <Text style={[styles.headerTitle, { color: c.text }]}>Profile Setup</Text>
-        <View style={{ width: 24 }} />
-      </View>
-
       <ScrollView
         contentContainerStyle={[
-          styles.scroll,
-          { paddingBottom: insets.bottom + space.xl },
+          styles.scrollContent,
+          {
+            paddingTop: insets.top + space.md,
+            paddingBottom: insets.bottom + space.xxl,
+          },
         ]}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
-        {/* Welcome */}
-        <View style={styles.section}>
-          <Text style={[styles.title, { color: c.text }]}>
-            Welcome{name ? `, ${name}` : ''}! 👋
-          </Text>
-          <Text style={[styles.subtitle, { color: c.textSecondary }]}>
-            Quick setup (1/2)
-          </Text>
-          <View style={[styles.progress, { backgroundColor: c.fill }]}>
-            <View
-              style={[styles.progressBar, { backgroundColor: c.accent, width: '50%' }]}
-            />
-          </View>
+        {/* Top Header */}
+        <View style={styles.topRow}>
+          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={22} color={c.textSecondary} />
+          </Pressable>
+          <FairpayLogo width={105} />
+          <Pressable onPress={handleSkip} hitSlop={12} style={styles.skipBtn}>
+            <Text style={[styles.skipTxt, { color: c.textTertiary }]}>Skip</Text>
+          </Pressable>
         </View>
 
-        {/* Name */}
-        <View style={styles.section}>
-          <Text style={[styles.label, { color: c.text }]}>Name *</Text>
-          <TextInput
-            style={[
-              styles.input,
-              { backgroundColor: c.fill, color: c.text, borderColor: c.fill },
-            ]}
-            placeholder="Your name"
-            placeholderTextColor={c.textTertiary}
-            value={name}
-            onChangeText={setName}
-            autoCapitalize="words"
-            autoCorrect={false}
-          />
-          {session?.user.user_metadata?.full_name && (
-            <Text style={[styles.hint, { color: c.textSecondary }]}>
-              ✓ From your Google account
-            </Text>
+        {/* Title Block with Apple SF Pro Light display typography */}
+        <View style={styles.titleBlock}>
+          <View style={[styles.stepPill, { backgroundColor: darkMode ? '#1C1C1E' : '#F2F2F7' }]}>
+            <Text style={[styles.stepTxt, { color: c.textSecondary }]}>Step 1 of 2 · Profile & Settlements</Text>
+          </View>
+          <Text style={[styles.heading, { color: c.text }]}>Complete your profile</Text>
+          <Text style={[styles.subtitle, { color: c.textSecondary }]}>
+            Fairpay needs your settlement handle and contacts so friends can settle debts directly with 0 fees.
+          </Text>
+        </View>
+
+        {/* Section 1: Personal Identity */}
+        <View style={styles.formSection}>
+          <Text style={[styles.sectionLabel, { color: c.textSecondary }]}>PERSONAL IDENTITY</Text>
+
+          {/* Full Name */}
+          <View style={styles.inputWrap}>
+            <Text style={[styles.fieldLabel, { color: c.text }]}>Full Name *</Text>
+            <TextInput
+              value={name}
+              onChangeText={setName}
+              placeholder="e.g. Vikas Sharma"
+              placeholderTextColor={c.textTertiary}
+              autoCapitalize="words"
+              style={[
+                styles.textInput,
+                { backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7', color: c.text },
+              ]}
+            />
+          </View>
+
+          {/* Verified & Complementary Contact */}
+          {isEmailAuth ? (
+            <>
+              {/* Verified Email Banner */}
+              <View style={[styles.verifiedCard, { backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7' }]}>
+                <Ionicons name="checkmark-circle" size={18} color={c.accent} />
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <Text style={[styles.verifiedTitle, { color: c.text }]}>Verified Email</Text>
+                  <Text style={[styles.verifiedSub, { color: c.textSecondary }]}>{authenticatedEmail}</Text>
+                </View>
+              </View>
+
+              {/* Complementary Phone Input */}
+              <View style={styles.inputWrap}>
+                <Text style={[styles.fieldLabel, { color: c.text }]}>
+                  Mobile Number <Text style={{ color: c.textTertiary, fontWeight: '400' }}>(recommended)</Text>
+                </Text>
+                <View style={[styles.phoneRow, { backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7' }]}>
+                  <Pressable
+                    onPress={() => setCountryPickerVisible(true)}
+                    style={styles.flagBtn}
+                  >
+                    <Text style={{ fontSize: 16 }}>{selectedCountry.flag}</Text>
+                    <Text style={[styles.dialTxt, { color: c.text }]}>{selectedCountry.dialCode}</Text>
+                    <Ionicons name="chevron-down" size={12} color={c.textTertiary} style={{ marginLeft: 2 }} />
+                  </Pressable>
+                  <TextInput
+                    value={complementaryPhone}
+                    onChangeText={setComplementaryPhone}
+                    placeholder="98765 43210"
+                    placeholderTextColor={c.textTertiary}
+                    keyboardType="phone-pad"
+                    maxLength={14}
+                    style={[styles.phoneInput, { color: c.text }]}
+                  />
+                </View>
+                <Text style={[styles.fieldHint, { color: c.textTertiary }]}>
+                  Used for WhatsApp payment reminders and 1-tap UPI requests.
+                </Text>
+              </View>
+            </>
+          ) : (
+            <>
+              {/* Verified Phone Banner */}
+              <View style={[styles.verifiedCard, { backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7' }]}>
+                <Ionicons name="checkmark-circle" size={18} color={c.accent} />
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <Text style={[styles.verifiedTitle, { color: c.text }]}>Verified Mobile</Text>
+                  <Text style={[styles.verifiedSub, { color: c.textSecondary }]}>{authenticatedPhone}</Text>
+                </View>
+              </View>
+
+              {/* Complementary Email Input */}
+              <View style={styles.inputWrap}>
+                <Text style={[styles.fieldLabel, { color: c.text }]}>
+                  Email Address <Text style={{ color: c.textTertiary, fontWeight: '400' }}>(for statements)</Text>
+                </Text>
+                <TextInput
+                  value={complementaryEmail}
+                  onChangeText={setComplementaryEmail}
+                  placeholder="name@example.com"
+                  placeholderTextColor={c.textTertiary}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  style={[
+                    styles.textInput,
+                    { backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7', color: c.text },
+                  ]}
+                />
+                <Text style={[styles.fieldHint, { color: c.textTertiary }]}>
+                  Used for 2-page PDF statements, balance receipts, and backup sign-in.
+                </Text>
+              </View>
+            </>
           )}
         </View>
 
-        {/* Phone (Optional) */}
-        <View style={styles.section}>
-          <Text style={[styles.label, { color: c.text }]}>
-            Phone <Text style={{ color: c.textTertiary }}>(optional)</Text>
+        {/* Section 2: Settlement Rail (UPI / Instant Pay) */}
+        <View style={styles.formSection}>
+          <Text style={[styles.sectionLabel, { color: c.textSecondary }]}>SETTLEMENT RAILS</Text>
+          <Text style={[styles.fieldLabel, { color: c.text }]}>Primary Payment Handle</Text>
+          <Text style={[styles.fieldHint, { color: c.textSecondary, marginBottom: 12 }]}>
+            When group members pay you back, funds deposit directly into this account.
           </Text>
-          <View style={styles.phoneInput}>
-            <Text
-              style={[
-                styles.phonePrefix,
-                { color: c.textSecondary, backgroundColor: c.fillSecondary },
-              ]}
-            >
-              +91
-            </Text>
-            <TextInput
-              style={[
-                styles.input,
-                { backgroundColor: c.fill, color: c.text, borderColor: c.fill, flex: 1 },
-              ]}
-              placeholder="9876543210"
-              placeholderTextColor={c.textTertiary}
-              value={phone}
-              onChangeText={(text) => setPhone(text.replace(/[^0-9]/g, ''))}
-              keyboardType="phone-pad"
-              maxLength={10}
-            />
-          </View>
-          <Text style={[styles.hint, { color: c.textTertiary }]}>
-            For payment reminders (SMS/WhatsApp)
-          </Text>
-        </View>
 
-        {/* Payment Method (Optional) */}
-        <View style={styles.section}>
-          <Text style={[styles.label, { color: c.text }]}>
-            Payment Method <Text style={{ color: c.textTertiary }}>(optional)</Text>
-          </Text>
-          <View
-            style={[styles.card, { backgroundColor: c.fillSecondary }]}
-          >
-            <View style={styles.cardHeader}>
-              <Text style={[styles.cardTitle, { color: c.text }]}>
-                🇮🇳 UPI ID
-              </Text>
-              <Text style={[styles.cardSubtitle, { color: c.textSecondary }]}>
-                For receiving payments
-              </Text>
-            </View>
+          {/* Payment Brand Selector */}
+          <View style={styles.brandRow}>
+            {PAYMENT_RAILS.map((p) => {
+              const active = selectedRail === p.rail;
+              return (
+                <Pressable
+                  key={p.rail}
+                  onPress={() => setSelectedRail(p.rail)}
+                  style={[
+                    styles.brandPill,
+                    {
+                      backgroundColor: active
+                        ? (darkMode ? '#2C2C2E' : '#E5E5EA')
+                        : (darkMode ? '#1C1C1E' : '#F5F5F7'),
+                      borderColor: active ? c.accent : 'transparent',
+                    },
+                  ]}
+                >
+                  <PaymentBrandLogo brand={p.brand} size={20} />
+                  <Text style={[styles.brandLabel, { color: active ? c.text : c.textSecondary }]}>
+                    {p.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {/* UPI ID / Handle Input */}
+          <View style={styles.inputWrap}>
             <TextInput
-              style={[
-                styles.input,
-                { backgroundColor: c.fill, color: c.text, borderColor: c.fill },
-              ]}
-              placeholder="yourname@paytm"
+              value={handle}
+              onChangeText={setHandle}
+              placeholder={PAYMENT_RAILS.find((r) => r.rail === selectedRail)?.placeholder || 'name@upi'}
               placeholderTextColor={c.textTertiary}
-              value={upiId}
-              onChangeText={(text) => setUpiId(text.toLowerCase().trim())}
               autoCapitalize="none"
               autoCorrect={false}
-              keyboardType="email-address"
+              style={[
+                styles.textInput,
+                { backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7', color: c.text },
+              ]}
             />
-            <Text style={[styles.cardHint, { color: c.textTertiary }]}>
-              Works with: Paytm, PhonePe, Google Pay, BHIM
-            </Text>
           </View>
-          <Text style={[styles.hint, { color: c.textTertiary }]}>
-            💡 You can add this later when settling up
-          </Text>
+        </View>
+
+        {/* Section 3: Currency */}
+        <View style={styles.formSection}>
+          <Text style={[styles.sectionLabel, { color: c.textSecondary }]}>DEFAULT CURRENCY</Text>
+          <View style={styles.currencyRow}>
+            {CURRENCIES.slice(0, 4).map((cur) => {
+              const active = currency === cur.code;
+              return (
+                <Pressable
+                  key={cur.code}
+                  onPress={() => setCurrency(cur.code)}
+                  style={[
+                    styles.currencyPill,
+                    {
+                      backgroundColor: active
+                        ? (darkMode ? '#2C2C2E' : '#E5E5EA')
+                        : (darkMode ? '#1C1C1E' : '#F5F5F7'),
+                      borderColor: active ? c.accent : 'transparent',
+                    },
+                  ]}
+                >
+                  <Text style={[styles.currencySymbol, { color: active ? c.text : c.textSecondary }]}>
+                    {cur.symbol}
+                  </Text>
+                  <Text style={[styles.currencyCode, { color: active ? c.text : c.textTertiary }]}>
+                    {cur.code}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Submit Button */}
+        <View style={{ marginTop: 24 }}>
+          <PrimaryButton
+            label={loading ? 'Saving…' : 'Continue to group setup →'}
+            onPress={handleContinue}
+            disabled={loading || !name.trim()}
+            variant="accent"
+          />
         </View>
       </ScrollView>
 
-      {/* Footer */}
-      <View
-        style={[
-          styles.footer,
-          {
-            backgroundColor: c.bg,
-            paddingBottom: insets.bottom + space.md,
-            borderTopColor: c.fill,
-          },
-        ]}
+      {/* Country Code Picker Modal */}
+      <Modal
+        visible={countryPickerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCountryPickerVisible(false)}
       >
-        <Pressable
-          style={styles.skipButton}
-          onPress={handleSkip}
-          disabled={loading}
-        >
-          <Text style={[styles.skipText, { color: c.textSecondary }]}>
-            Skip
-          </Text>
-        </Pressable>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { backgroundColor: c.card }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: c.text }]}>Select Country Code</Text>
+              <Pressable onPress={() => setCountryPickerVisible(false)} hitSlop={10}>
+                <Ionicons name="close" size={24} color={c.textSecondary} />
+              </Pressable>
+            </View>
 
-        <Pressable
-          style={[
-            styles.continueButton,
-            { backgroundColor: c.accent },
-            (!name.trim() || loading) && styles.buttonDisabled,
-          ]}
-          onPress={handleContinue}
-          disabled={!name.trim() || loading}
-        >
-          {loading ? (
-            <ActivityIndicator color={c.accentInk} />
-          ) : (
-            <Text style={[styles.continueText, { color: c.accentInk }]}>
-              Continue
-            </Text>
-          )}
-        </Pressable>
-      </View>
-    </View>
+            <ScrollView style={{ maxHeight: 380 }}>
+              {COUNTRY_CODES.map((item) => (
+                <Pressable
+                  key={`${item.code}-${item.dialCode}`}
+                  style={[
+                    styles.countryItem,
+                    { borderBottomColor: c.separator },
+                    selectedCountry.dialCode === item.dialCode && {
+                      backgroundColor: c.fillSecondary,
+                    },
+                  ]}
+                  onPress={() => {
+                    setSelectedCountry(item);
+                    setCountryPickerVisible(false);
+                  }}
+                >
+                  <Text style={styles.countryItemFlag}>{item.flag}</Text>
+                  <Text style={[styles.countryItemName, { color: c.text }]}>{item.name}</Text>
+                  <Text style={[styles.countryItemDial, { color: c.textSecondary }]}>
+                    {item.dialCode}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  screen: { flex: 1 },
+  scrollContent: {
+    paddingHorizontal: space.xl,
+    flexGrow: 1,
   },
-  header: {
+  topRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: space.xl,
-    paddingVertical: space.md,
+    marginBottom: space.lg,
   },
-  headerTitle: {
-    ...type.headline,
+  backBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  scroll: {
-    paddingHorizontal: space.xl,
+  skipBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
-  section: {
-    marginBottom: space.xxl,
+  skipTxt: {
+    fontSize: 13.5,
+    fontWeight: '400',
   },
-  title: {
-    ...type.largeTitle,
-    marginBottom: space.xs,
+  titleBlock: {
+    marginBottom: space.xl,
+  },
+  stepPill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4.5,
+    borderRadius: 8,
+    marginBottom: 10,
+  },
+  stepTxt: {
+    fontSize: 11.5,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+  },
+  heading: {
+    fontSize: 27,
+    fontWeight: '300', // Apple SF Pro Display Light
+    letterSpacing: -0.7,
+    marginBottom: 6,
   },
   subtitle: {
-    ...type.body,
+    fontSize: 13.5,
+    fontWeight: '400',
+    lineHeight: 19,
+    letterSpacing: -0.1,
+  },
+  formSection: {
+    marginBottom: space.xl,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.8,
+    marginBottom: 12,
+  },
+  inputWrap: {
     marginBottom: space.md,
   },
-  progress: {
-    height: 4,
-    borderRadius: 2,
-    overflow: 'hidden',
+  fieldLabel: {
+    fontSize: 13.5,
+    fontWeight: '500',
+    letterSpacing: -0.1,
+    marginBottom: 6,
   },
-  progressBar: {
+  fieldHint: {
+    fontSize: 12,
+    fontWeight: '400',
+    lineHeight: 16,
+    marginTop: 4,
+    letterSpacing: -0.1,
+  },
+  textInput: {
+    height: 50,
+    borderRadius: 13,
+    paddingHorizontal: 14,
+    fontSize: 15,
+    fontWeight: '400',
+  },
+  verifiedCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 13,
+    marginBottom: space.md,
+  },
+  verifiedTitle: {
+    fontSize: 11,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+  },
+  verifiedSub: {
+    fontSize: 13.5,
+    fontWeight: '400',
+  },
+  phoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 50,
+    borderRadius: 13,
+    paddingHorizontal: 8,
+  },
+  flagBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  dialTxt: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginLeft: 4,
+  },
+  phoneInput: {
+    flex: 1,
     height: '100%',
-    borderRadius: 2,
+    fontSize: 15,
+    fontWeight: '400',
+    paddingHorizontal: 8,
   },
-  label: {
-    ...type.subheadline,
-    fontWeight: '600',
-    marginBottom: space.sm,
+  brandRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
   },
-  input: {
-    ...type.body,
-    paddingHorizontal: space.md,
-    paddingVertical: 14,
+  brandPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 12,
     borderWidth: 1,
   },
-  hint: {
-    ...type.caption1,
-    marginTop: space.xs,
+  brandLabel: {
+    fontSize: 12.5,
+    fontWeight: '500',
+    letterSpacing: -0.1,
   },
-  phoneInput: {
+  currencyRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
+    gap: 10,
   },
-  phonePrefix: {
-    ...type.body,
-    fontWeight: '600',
-    paddingHorizontal: space.md,
-    paddingVertical: 14,
-    borderRadius: 12,
-  },
-  card: {
-    padding: space.md,
-    borderRadius: 14,
-    marginBottom: space.sm,
-  },
-  cardHeader: {
-    marginBottom: space.md,
-  },
-  cardTitle: {
-    ...type.subheadline,
-    fontWeight: '600',
-  },
-  cardSubtitle: {
-    ...type.caption1,
-    marginTop: 2,
-  },
-  cardHint: {
-    ...type.caption2,
-    marginTop: space.xs,
-  },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.md,
-    paddingHorizontal: space.xl,
-    paddingTop: space.md,
-    borderTopWidth: 1,
-  },
-  skipButton: {
-    paddingVertical: 16,
-    paddingHorizontal: space.lg,
-  },
-  skipText: {
-    ...type.subheadline,
-    fontWeight: '600',
-  },
-  continueButton: {
+  currencyPill: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    borderRadius: 14,
-    minHeight: 56,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
   },
-  continueText: {
-    ...type.subheadline,
-    fontWeight: '700',
+  currencySymbol: {
+    fontSize: 16,
+    fontWeight: '500',
+    marginBottom: 2,
   },
-  buttonDisabled: {
-    opacity: 0.5,
+  currencyCode: {
+    fontSize: 11,
+    fontWeight: '400',
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: space.xl,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: space.lg,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    letterSpacing: -0.2,
+  },
+  countryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+  },
+  countryItemFlag: { fontSize: 22, marginRight: 12 },
+  countryItemName: { flex: 1, fontSize: 15, fontWeight: '500' },
+  countryItemDial: { fontSize: 14, fontWeight: '600' },
 });

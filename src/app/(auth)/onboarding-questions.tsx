@@ -5,484 +5,372 @@ import {
   StyleSheet,
   Pressable,
   ScrollView,
-  Alert,
-  ActivityIndicator,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useColors } from '@/store/theme';
+import { useColors, useThemeStore } from '@/store/theme';
 import { useAuthStore } from '@/store/auth';
 import { useTripStore } from '@/store/trips';
 import { supabase } from '@/lib/supabase';
-import { space, type } from '@/theme/tokens';
+import { FairpayLogo } from '@/components/FairpayLogo';
+import { PrimaryButton } from '@/components/PrimaryButton';
+import { sendWelcomeGreeting } from '@/lib/welcomeEmail';
+import { space } from '@/theme/tokens';
 
 type UseCase = 'roommates' | 'trips' | 'groups' | 'partner' | null;
 type Frequency = 'daily' | 'weekly' | 'monthly' | 'trips-only' | null;
 
-const USE_CASES = [
+const USE_CASES: { id: NonNullable<UseCase>; iconName: keyof typeof Ionicons.glyphMap; title: string; subtitle: string }[] = [
   {
-    id: 'roommates' as const,
-    icon: '🎒',
-    title: 'With roommates',
-    subtitle: 'Rent, utilities, groceries',
+    id: 'trips',
+    iconName: 'airplane-outline',
+    title: 'Travel & Vacations',
+    subtitle: 'Flights, stays, food & group activities',
   },
   {
-    id: 'trips' as const,
-    icon: '✈️',
-    title: 'On trips',
-    subtitle: 'Travel, food, activities',
+    id: 'roommates',
+    iconName: 'home-outline',
+    title: 'Roommates & Rent',
+    subtitle: 'Rent, Wi-Fi, electricity, groceries',
   },
   {
-    id: 'groups' as const,
-    icon: '👥',
-    title: 'With groups',
-    subtitle: 'Dinners, events, outings',
+    id: 'groups',
+    iconName: 'people-outline',
+    title: 'Friends & Dinners',
+    subtitle: 'Weekend hangs, parties, drinks, gifts',
   },
   {
-    id: 'partner' as const,
-    icon: '💑',
-    title: 'With partner',
-    subtitle: 'Dates, bills, groceries',
+    id: 'partner',
+    iconName: 'heart-outline',
+    title: 'With Partner',
+    subtitle: 'Dates, bills, dining & household splits',
   },
 ];
 
-const FREQUENCIES = [
+const FREQUENCIES: { id: NonNullable<Frequency>; title: string; subtitle: string }[] = [
   {
-    id: 'daily' as const,
-    icon: '📅',
-    title: 'Daily',
-    subtitle: 'Roommates, regular splits',
+    id: 'daily',
+    title: 'Daily / Several times a week',
+    subtitle: 'Frequent shared living expenses',
   },
   {
-    id: 'weekly' as const,
-    icon: '📆',
+    id: 'weekly',
     title: 'Weekly',
-    subtitle: 'Regular group activities',
+    subtitle: 'Regular social events or outings',
   },
   {
-    id: 'monthly' as const,
-    icon: '🗓️',
+    id: 'monthly',
     title: 'Monthly',
-    subtitle: 'Occasional splits',
+    subtitle: 'Rent & shared subscriptions',
   },
   {
-    id: 'trips-only' as const,
-    icon: '🎯',
-    title: 'Only for trips',
-    subtitle: 'Travel expenses only',
+    id: 'trips-only',
+    title: 'Only on vacations & trips',
+    subtitle: 'Periodic travel expenses',
   },
 ];
 
 export default function QuestionsScreen() {
   const insets = useSafeAreaInsets();
   const c = useColors();
-  const { user, session } = useAuthStore();
+  const darkMode = useThemeStore((s) => s.darkMode);
+  const { user, session, name, email, preferredCurrency } = useAuthStore();
   const addTrip = useTripStore((s) => s.addTrip);
 
   const [step, setStep] = useState<1 | 2>(1);
-  const [useCase, setUseCase] = useState<UseCase>(null);
-  const [frequency, setFrequency] = useState<Frequency>(null);
+  const [useCase, setUseCase] = useState<UseCase>('trips');
+  const [frequency, setFrequency] = useState<Frequency>('weekly');
   const [loading, setLoading] = useState(false);
 
-  const handleUseCaseSelect = (selected: UseCase) => {
-    setUseCase(selected);
-  };
-
-  const handleContinueFromStep1 = () => {
-    if (!useCase) return;
-    setStep(2);
-  };
-
-  const handleFinish = async () => {
-    if (!useCase || !frequency) return;
-
+  const completeOnboardingFlow = async (skipGroup = false) => {
     try {
       setLoading(true);
+      const userName = name || user?.name || 'You';
+      const userEmail = email || user?.email || '';
 
       // Save onboarding preferences to database
-      const onboardingData = {
-        completed: true,
-        use_case: useCase,
-        frequency: frequency,
-        completed_at: new Date().toISOString(),
-      };
-
       if (session?.user?.id) {
-        const { error } = await supabase
-          .from('users')
-          .update({
-            onboarding_data: onboardingData,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', session.user.id);
-
-        if (error) {
-          console.warn('Database onboarding sync skipped:', error.message);
+        try {
+          await supabase
+            .from('users')
+            .update({
+              onboarding_data: {
+                completed: true,
+                use_case: useCase,
+                frequency: frequency,
+                completed_at: new Date().toISOString(),
+              },
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', session.user.id);
+        } catch {
+          // ignore
         }
       }
 
-      // Auto-create first group based on use case
-      let groupName = 'My Group';
-      const userName = user?.name || useAuthStore.getState().name || 'You';
+      // Auto-create starter group if not skipped
+      if (!skipGroup && useCase) {
+        let groupName = 'Goa Trip 2026';
+        switch (useCase) {
+          case 'roommates':
+            groupName = 'Apartment 402';
+            break;
+          case 'trips':
+            groupName = 'Goa Vacation';
+            break;
+          case 'groups':
+            groupName = 'Weekend Hangout';
+            break;
+          case 'partner':
+            groupName = `${userName} & Partner`;
+            break;
+        }
 
-      switch (useCase) {
-        case 'roommates':
-          groupName = 'Home';
-          break;
-        case 'trips':
-          groupName = 'Trip';
-          break;
-        case 'groups':
-          groupName = 'My Group';
-          break;
-        case 'partner':
-          groupName = `${userName} & Partner`;
-          break;
+        try {
+          addTrip(groupName, useCase, preferredCurrency || 'INR', userName);
+        } catch {
+          // ignore
+        }
       }
 
-      // Create the first group
-      const trip = addTrip(groupName, useCase, 'INR', userName);
-
-      // Mark onboarding as done in local store
+      // Finalize status: mark onboarding done & trigger celebration modal once
       useAuthStore.getState().setOnboardingDone(true);
       useAuthStore.getState().completeQuestions();
+      useAuthStore.getState().setShowWelcomeModal(true);
 
-      // Navigate to the newly created group
-      router.replace({
-        pathname: '/trip/[id]',
-        params: { id: trip.id, onboard: '1' },
-      });
-    } catch (error: any) {
-      console.error('Onboarding completion error:', error);
-      Alert.alert('Setup failed', error.message || 'Could not complete setup');
+      if (userEmail) {
+        sendWelcomeGreeting(userName, userEmail);
+      }
+
+      router.replace('/');
+    } catch (err: any) {
+      console.warn('Onboarding completion error:', err);
+      useAuthStore.getState().setOnboardingDone(true);
+      useAuthStore.getState().setShowWelcomeModal(true);
+      router.replace('/');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSkip = () => {
-    // Mark onboarding as done without preferences
-    useAuthStore.getState().setOnboardingDone(true);
-    useAuthStore.getState().completeQuestions();
-    router.replace('/');
-  };
-
-  const progressPercent = step === 1 ? 75 : 100;
-
   return (
-    <View
-      style={[
-        styles.container,
-        {
-          backgroundColor: c.bg,
-          paddingTop: insets.top + space.lg,
-        },
-      ]}
-    >
-      {/* Header */}
-      <View style={styles.header}>
-        <Pressable
-          onPress={() => (step === 2 ? setStep(1) : router.back())}
-          hitSlop={12}
-        >
-          <Ionicons name="chevron-back" size={24} color={c.text} />
-        </Pressable>
-        <Text style={[styles.headerTitle, { color: c.text }]}>
-          {step === 1 ? 'Almost there!' : 'Final step'}
-        </Text>
-        <Pressable onPress={handleSkip} hitSlop={12}>
-          <Text style={[styles.skipText, { color: c.textSecondary }]}>Skip</Text>
-        </Pressable>
-      </View>
-
+    <View style={[styles.screen, { backgroundColor: c.bg }]}>
       <ScrollView
         contentContainerStyle={[
-          styles.scroll,
-          { paddingBottom: insets.bottom + 100 },
+          styles.scrollContent,
+          {
+            paddingTop: insets.top + space.md,
+            paddingBottom: insets.bottom + space.xxl,
+          },
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Progress */}
-        <View style={styles.progressSection}>
-          <Text style={[styles.progressText, { color: c.textSecondary }]}>
-            Quick setup ({step}/2)
-          </Text>
-          <View style={[styles.progress, { backgroundColor: c.fill }]}>
-            <View
-              style={[
-                styles.progressBar,
-                { backgroundColor: c.accent, width: `${progressPercent}%` },
-              ]}
-            />
-          </View>
+        {/* Navigation / Skip Bar */}
+        <View style={styles.topRow}>
+          {step === 2 ? (
+            <Pressable onPress={() => setStep(1)} hitSlop={12} style={styles.backBtn}>
+              <Ionicons name="chevron-back" size={22} color={c.textSecondary} />
+            </Pressable>
+          ) : (
+            <View style={{ width: 36 }} />
+          )}
+          <FairpayLogo width={105} />
+          <Pressable onPress={() => completeOnboardingFlow(true)} hitSlop={12} style={styles.skipBtn}>
+            <Text style={[styles.skipTxt, { color: c.textTertiary }]}>Skip</Text>
+          </Pressable>
         </View>
 
-        {/* Step 1: Use Case */}
-        {step === 1 && (
-          <View style={styles.section}>
-            <Text style={[styles.question, { color: c.text }]}>
-              How will you split expenses?
-            </Text>
-            <Text style={[styles.questionSub, { color: c.textSecondary }]}>
-              We'll personalize your experience
-            </Text>
+        {/* Step Header */}
+        <View style={styles.titleBlock}>
+          <View style={[styles.stepPill, { backgroundColor: darkMode ? '#1C1C1E' : '#F2F2F7' }]}>
+            <Text style={[styles.stepTxt, { color: c.textSecondary }]}>Step 2 of 2 · {step === 1 ? 'Primary Purpose' : 'Cadence'}</Text>
+          </View>
+          <Text style={[styles.heading, { color: c.text }]}>
+            {step === 1 ? 'How will you use Fairpay?' : 'How often do you split?'}
+          </Text>
+          <Text style={[styles.subtitle, { color: c.textSecondary }]}>
+            {step === 1
+              ? 'We will tailor your smart split engine and default currency for your group.'
+              : 'Helps Fairpay schedule smart reminders before debts become awkward.'}
+          </Text>
+        </View>
 
-            <View style={styles.options}>
-              {USE_CASES.map((option) => (
+        {/* Question Options */}
+        {step === 1 ? (
+          <View style={styles.optionsWrap}>
+            {USE_CASES.map((item) => {
+              const active = useCase === item.id;
+              return (
                 <Pressable
-                  key={option.id}
+                  key={item.id}
+                  onPress={() => setUseCase(item.id)}
                   style={[
-                    styles.option,
+                    styles.card,
                     {
-                      backgroundColor:
-                        useCase === option.id ? c.accent : c.fillSecondary,
-                      borderColor: useCase === option.id ? c.accent : 'transparent',
+                      backgroundColor: active
+                        ? (darkMode ? '#2C2C2E' : '#FFFFFF')
+                        : (darkMode ? '#1C1C1E' : '#F5F5F7'),
+                      borderColor: active ? c.accent : 'transparent',
                     },
                   ]}
-                  onPress={() => handleUseCaseSelect(option.id)}
                 >
-                  <Text style={styles.optionIcon}>{option.icon}</Text>
-                  <View style={styles.optionContent}>
-                    <Text
-                      style={[
-                        styles.optionTitle,
-                        {
-                          color: useCase === option.id ? c.accentInk : c.text,
-                        },
-                      ]}
-                    >
-                      {option.title}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.optionSubtitle,
-                        {
-                          color:
-                            useCase === option.id ? c.accentInk : c.textSecondary,
-                        },
-                      ]}
-                    >
-                      {option.subtitle}
-                    </Text>
-                  </View>
-                  {useCase === option.id && (
+                  <View style={[styles.iconWrap, { backgroundColor: active ? c.accent : (darkMode ? '#242426' : '#E5E5EA') }]}>
                     <Ionicons
-                      name="checkmark-circle"
-                      size={24}
-                      color={c.accentInk}
+                      name={item.iconName}
+                      size={20}
+                      color={active ? '#000000' : c.textSecondary}
                     />
+                  </View>
+                  <View style={styles.textWrap}>
+                    <Text style={[styles.cardTitle, { color: c.text }]}>{item.title}</Text>
+                    <Text style={[styles.cardSub, { color: c.textSecondary }]}>{item.subtitle}</Text>
+                  </View>
+                  {active && (
+                    <Ionicons name="checkmark-circle" size={20} color={c.accent} style={{ marginLeft: 8 }} />
                   )}
                 </Pressable>
-              ))}
+              );
+            })}
+
+            <View style={{ marginTop: 24 }}>
+              <PrimaryButton
+                label="Continue →"
+                onPress={() => setStep(2)}
+                disabled={!useCase}
+                variant="accent"
+              />
             </View>
           </View>
-        )}
-
-        {/* Step 2: Frequency */}
-        {step === 2 && (
-          <View style={styles.section}>
-            <Text style={[styles.question, { color: c.text }]}>
-              How often do you split?
-            </Text>
-            <Text style={[styles.questionSub, { color: c.textSecondary }]}>
-              We'll set up reminders for you
-            </Text>
-
-            <View style={styles.options}>
-              {FREQUENCIES.map((option) => (
+        ) : (
+          <View style={styles.optionsWrap}>
+            {FREQUENCIES.map((item) => {
+              const active = frequency === item.id;
+              return (
                 <Pressable
-                  key={option.id}
+                  key={item.id}
+                  onPress={() => setFrequency(item.id)}
                   style={[
-                    styles.option,
+                    styles.card,
                     {
-                      backgroundColor:
-                        frequency === option.id ? c.accent : c.fillSecondary,
-                      borderColor:
-                        frequency === option.id ? c.accent : 'transparent',
+                      backgroundColor: active
+                        ? (darkMode ? '#2C2C2E' : '#FFFFFF')
+                        : (darkMode ? '#1C1C1E' : '#F5F5F7'),
+                      borderColor: active ? c.accent : 'transparent',
                     },
                   ]}
-                  onPress={() => setFrequency(option.id)}
                 >
-                  <Text style={styles.optionIcon}>{option.icon}</Text>
-                  <View style={styles.optionContent}>
-                    <Text
-                      style={[
-                        styles.optionTitle,
-                        {
-                          color: frequency === option.id ? c.accentInk : c.text,
-                        },
-                      ]}
-                    >
-                      {option.title}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.optionSubtitle,
-                        {
-                          color:
-                            frequency === option.id
-                              ? c.accentInk
-                              : c.textSecondary,
-                        },
-                      ]}
-                    >
-                      {option.subtitle}
-                    </Text>
+                  <View style={styles.textWrap}>
+                    <Text style={[styles.cardTitle, { color: c.text }]}>{item.title}</Text>
+                    <Text style={[styles.cardSub, { color: c.textSecondary }]}>{item.subtitle}</Text>
                   </View>
-                  {frequency === option.id && (
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={24}
-                      color={c.accentInk}
-                    />
+                  {active && (
+                    <Ionicons name="checkmark-circle" size={20} color={c.accent} style={{ marginLeft: 8 }} />
                   )}
                 </Pressable>
-              ))}
+              );
+            })}
+
+            <View style={{ marginTop: 24 }}>
+              <PrimaryButton
+                label={loading ? 'Finishing setup…' : 'Complete Setup & Launch →'}
+                onPress={() => completeOnboardingFlow(false)}
+                disabled={loading || !frequency}
+                variant="accent"
+              />
             </View>
           </View>
         )}
       </ScrollView>
-
-      {/* Footer */}
-      <View
-        style={[
-          styles.footer,
-          {
-            backgroundColor: c.bg,
-            paddingBottom: insets.bottom + space.md,
-            borderTopColor: c.fill,
-          },
-        ]}
-      >
-        <Pressable
-          style={[
-            styles.continueButton,
-            { backgroundColor: c.accent },
-            ((step === 1 && !useCase) ||
-              (step === 2 && !frequency) ||
-              loading) &&
-              styles.buttonDisabled,
-          ]}
-          onPress={step === 1 ? handleContinueFromStep1 : handleFinish}
-          disabled={
-            (step === 1 && !useCase) || (step === 2 && !frequency) || loading
-          }
-        >
-          {loading ? (
-            <ActivityIndicator color={c.accentInk} />
-          ) : (
-            <>
-              <Text style={[styles.continueText, { color: c.accentInk }]}>
-                {step === 1 ? 'Continue' : 'Get Started'}
-              </Text>
-              {step === 1 && (
-                <Ionicons name="arrow-forward" size={20} color={c.accentInk} />
-              )}
-            </>
-          )}
-        </Pressable>
-      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  screen: { flex: 1 },
+  scrollContent: {
+    paddingHorizontal: space.xl,
+    flexGrow: 1,
   },
-  header: {
+  topRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: space.xl,
-    paddingVertical: space.md,
+    marginBottom: space.lg,
   },
-  headerTitle: {
-    ...type.headline,
-  },
-  skipText: {
-    ...type.subheadline,
-    fontWeight: '600',
-  },
-  scroll: {
-    paddingHorizontal: space.xl,
-  },
-  progressSection: {
-    marginBottom: space.xxl,
-  },
-  progressText: {
-    ...type.caption1,
-    marginBottom: space.sm,
-  },
-  progress: {
-    height: 4,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressBar: {
-    height: '100%',
-    borderRadius: 2,
-  },
-  section: {
-    marginBottom: space.xl,
-  },
-  question: {
-    ...type.title2,
-    marginBottom: space.xs,
-  },
-  questionSub: {
-    ...type.body,
-    marginBottom: space.xl,
-  },
-  options: {
-    gap: space.md,
-  },
-  option: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: space.md,
-    borderRadius: 16,
-    borderWidth: 2,
-  },
-  optionIcon: {
-    fontSize: 32,
-    marginRight: space.md,
-  },
-  optionContent: {
-    flex: 1,
-  },
-  optionTitle: {
-    ...type.subheadline,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  optionSubtitle: {
-    ...type.caption1,
-  },
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingHorizontal: space.xl,
-    paddingTop: space.md,
-    borderTopWidth: 1,
-  },
-  continueButton: {
-    flexDirection: 'row',
+  backBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: space.sm,
-    paddingVertical: 16,
-    borderRadius: 14,
-    minHeight: 56,
   },
-  continueText: {
-    ...type.subheadline,
-    fontWeight: '700',
+  skipBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
-  buttonDisabled: {
-    opacity: 0.5,
+  skipTxt: {
+    fontSize: 13.5,
+    fontWeight: '400',
+  },
+  titleBlock: {
+    marginBottom: space.xl,
+  },
+  stepPill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4.5,
+    borderRadius: 8,
+    marginBottom: 10,
+  },
+  stepTxt: {
+    fontSize: 11.5,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+  },
+  heading: {
+    fontSize: 27,
+    fontWeight: '300', // Apple SF Pro Display Light
+    letterSpacing: -0.7,
+    marginBottom: 6,
+  },
+  subtitle: {
+    fontSize: 13.5,
+    fontWeight: '400',
+    lineHeight: 19,
+    letterSpacing: -0.1,
+  },
+  optionsWrap: {
+    gap: 10,
+  },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1.5,
+  },
+  iconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  textWrap: {
+    flex: 1,
+  },
+  cardTitle: {
+    fontSize: 14.5,
+    fontWeight: '500',
+    letterSpacing: -0.1,
+    marginBottom: 2,
+  },
+  cardSub: {
+    fontSize: 12,
+    fontWeight: '400',
+    lineHeight: 16,
+    letterSpacing: -0.1,
   },
 });

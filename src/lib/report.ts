@@ -536,7 +536,7 @@ table { border-collapse: collapse; }
 <div class="page-2 page2bg" style="padding:24px 30px 14px;text-align:center">
 
   <!-- Top meta bar -->
-  <table style="width:100%;margin-bottom:12px"><tr>
+  <table style="width:100%;margin-bottom:14px"><tr>
     <td style="vertical-align:middle;text-align:left">
       <svg width="12" height="12" viewBox="0 0 44 64" style="vertical-align:middle;margin-right:4px"><rect x="8" y="12" width="10" height="40" rx="4" fill="#000"/><rect x="8" y="12" width="28" height="10" rx="4" fill="#000"/><rect x="8" y="27" width="22" height="10" rx="4" fill="#B2FF24"/></svg>
       <span style="font-size:10px;color:#000;vertical-align:middle;font-weight:700">Fairpay</span>
@@ -548,23 +548,23 @@ table { border-collapse: collapse; }
   </tr></table>
 
   <!-- Label badge (MINIMAL TITLE CASE) -->
-  <div style="margin-top:6px;margin-bottom:6px">
-    <span style="display:inline-block;background-color:#E5E5EA;color:#1C1C1E;padding:2.5px 9px;border-radius:4px;font-size:7.5px;font-weight:500;letter-spacing:0.02em">Trip summary</span>
+  <div style="margin-top:6px;margin-bottom:8px">
+    <span style="display:inline-block;background-color:#E5E5EA;color:#1C1C1E;padding:3px 10px;border-radius:4px;font-size:7.5px;font-weight:500;letter-spacing:0.04em">Trip summary</span>
   </div>
 
-  <!-- Main title — single line, airy, light weight -->
-  <div style="font-size:36px;font-weight:200;color:#000;letter-spacing:-1.3px;margin-bottom:4px;line-height:1">Your trip, at a glance</div>
+  <!-- Main title — slightly larger, single line, airy, light weight -->
+  <div style="font-size:40px;font-weight:250;color:#000;letter-spacing:-1px;margin-bottom:6px;line-height:1.05;white-space:nowrap">Your trip, at a glance</div>
 
-  <!-- Sub-info lines -->
-  <div style="font-size:11px;color:#3A3A3C;margin-bottom:3px;font-weight:400">
+  <!-- Sub-info lines (graceful vertical breathing room) -->
+  <div style="font-size:11.5px;color:#3A3A3C;margin-bottom:5px;font-weight:400;letter-spacing:0.1px">
     Powered by <b style="color:#000;font-weight:700">Fairpay</b> &nbsp;&middot;&nbsp; Zero-friction settlements
   </div>
-  <div style="font-size:9px;color:#8E8E93;margin-bottom:16px;font-weight:300">
+  <div style="font-size:9.5px;color:#8E8E93;margin-bottom:20px;font-weight:300;letter-spacing:0.15px">
     <b style="color:#000;font-weight:500">${esc(trip.name)}</b> &nbsp;&bull;&nbsp; ${fDate} &nbsp;&bull;&nbsp; ${currency} (${sym}) &nbsp;&bull;&nbsp; ${trip.members.length} member${trip.members.length !== 1 ? 's' : ''}
   </div>
 
   <!-- Phone mockup container (310x642, TRUE IPHONE 15 RATIO ~2.07:1, ZERO LEAKAGE) -->
-  <div style="position:relative;width:310px;height:642px;margin:0 auto">
+  <div style="position:relative;width:310px;height:642px;margin:4px auto 0">
     ${phoneImg ? `<img src="${phoneImg}" style="position:absolute;top:0;left:0;width:310px;height:642px;z-index:2;pointer-events:none" />` : ''}
     <!-- Dark screen interior (calibrated exactly inside the bezel, zero leakage) -->
     <div style="position:absolute;top:28px;left:27px;right:27px;bottom:28px;background-color:#1C1C1E;border-radius:36px;z-index:1;overflow:hidden;padding:40px 14px 12px;text-align:left" class="phonebg">

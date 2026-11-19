@@ -34,8 +34,10 @@ type AuthStore = {
   paymentMethods: PaymentMethod[];
   onboardingDone: boolean;
   questionsDone: boolean;
+  showWelcomeModal: boolean;
   
   // Actions
+  setShowWelcomeModal: (show: boolean) => void;
   setUser: (user: {
     id: string;
     email: string;
@@ -79,6 +81,8 @@ export const useAuthStore = create<AuthStore>()(
       paymentMethods: [],
       onboardingDone: false,
       questionsDone: false,
+      showWelcomeModal: false,
+      setShowWelcomeModal: (show) => set({ showWelcomeModal: show }),
       
       // Set Supabase user
       setUser: (user) =>
@@ -130,6 +134,8 @@ export const useAuthStore = create<AuthStore>()(
           isLoggedIn: false,
           email: '',
           phone: '',
+          showWelcomeModal: false,
+          onboardingDone: false,
         });
       },
       

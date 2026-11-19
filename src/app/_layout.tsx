@@ -7,6 +7,7 @@ import { useTripStore } from '@/store/trips';
 import { useAuthStore } from '@/store/auth';
 import { parseInvitePayload } from '@/lib/invite';
 import { AuthGuard } from '@/components/AuthGuard';
+import { supabase } from '@/lib/supabase';
 
 function useInviteDeepLink() {
   const joinByInviteCodeAsync = useTripStore((s) => s.joinByInviteCodeAsync);
@@ -16,6 +17,39 @@ function useInviteDeepLink() {
     const handle = async (url: string | null) => {
       if (!url) return;
       
+      // Handle Supabase Auth callback links
+      if (
+        url.includes('access_token=') ||
+        url.includes('refresh_token=') ||
+        url.includes('type=signup') ||
+        url.includes('type=magiclink')
+      ) {
+        try {
+          const hashIdx = url.indexOf('#');
+          const queryIdx = url.indexOf('?');
+          const paramsStr =
+            hashIdx !== -1
+              ? url.slice(hashIdx + 1)
+              : queryIdx !== -1
+              ? url.slice(queryIdx + 1)
+              : '';
+          const params = new URLSearchParams(paramsStr);
+          const accessToken = params.get('access_token');
+          const refreshToken = params.get('refresh_token');
+          if (accessToken && refreshToken) {
+            await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            useAuthStore.getState().setShowWelcomeModal(true);
+            router.replace('/');
+            return;
+          }
+        } catch (e) {
+          console.warn('Failed to handle auth deep link:', e);
+        }
+      }
+
       // Handle invite links
       const code = parseInvitePayload(url);
       if (code) {

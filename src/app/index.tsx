@@ -15,6 +15,7 @@ import { MotiView } from 'moti';
 import { ActionTile } from '@/components/ActionTile';
 import { SoftCard } from '@/components/SoftCard';
 import { NewTripSheet } from '@/components/NewTripSheet';
+import { WelcomeGreetingModal } from '@/components/WelcomeGreetingModal';
 import { FadeIn } from '@/components/FadeIn';
 import { FairpayLogo } from '@/components/FairpayLogo';
 import { SectionLabel } from '@/components/SectionLabel';
@@ -30,10 +31,19 @@ import { enter } from '@/theme/motion';
 
 type SpendFilter = 'all' | 'settled' | 'received' | 'pending';
 
+function getFirstName(fullName?: string | null): string {
+  if (!fullName) return 'there';
+  const clean = fullName.trim();
+  if (!clean) return 'there';
+  const first = clean.split(/\s+/)[0];
+  return first.charAt(0).toUpperCase() + first.slice(1);
+}
+
 function greetingFor(name: string) {
   const h = new Date().getHours();
   const hi = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-  return `${hi}, ${name}`;
+  const first = getFirstName(name);
+  return `${hi}, ${first}`;
 }
 
 export default function HomeScreen() {
@@ -474,6 +484,7 @@ export default function HomeScreen() {
         onClose={() => setSheetOpen(false)}
         onCreate={handleCreate}
       />
+      <WelcomeGreetingModal />
     </View>
   );
 }
