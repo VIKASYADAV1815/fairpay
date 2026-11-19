@@ -26,6 +26,7 @@ type AuthStore = {
   name: string;
   email: string;
   phone: string;
+  avatar: string;
   
   // Legacy fields (keep for compatibility)
   /** @deprecated prefer paymentMethods */
@@ -58,6 +59,7 @@ type AuthStore = {
     upiId?: string;
     phone?: string;
     email?: string;
+    avatar?: string;
     preferredCurrency?: CurrencyCode;
     paymentMethods?: PaymentMethod[];
   }) => void;
@@ -76,6 +78,7 @@ export const useAuthStore = create<AuthStore>()(
       name: 'Vikas', // Default for dev
       email: '',
       phone: '',
+      avatar: '',
       upiId: '',
       preferredCurrency: DEFAULT_CURRENCY,
       paymentMethods: [],
@@ -98,6 +101,7 @@ export const useAuthStore = create<AuthStore>()(
             isLoggedIn: !!user,
             name: user?.name || s.name,
             email: user?.email || s.email,
+            avatar: user?.avatar ?? s.avatar,
             paymentMethods: payMethods,
             upiId: upi,
           };
@@ -134,6 +138,7 @@ export const useAuthStore = create<AuthStore>()(
           isLoggedIn: false,
           email: '',
           phone: '',
+          avatar: '',
           showWelcomeModal: false,
           onboardingDone: false,
         });
@@ -155,11 +160,13 @@ export const useAuthStore = create<AuthStore>()(
           }
           const updatedName = data.name?.trim() || s.name;
           const updatedEmail = data.email !== undefined ? data.email.trim() : s.email;
+          const updatedAvatar = data.avatar !== undefined ? data.avatar : s.avatar;
           const updatedUser = s.user
             ? {
                 ...s.user,
                 name: updatedName,
                 email: updatedEmail,
+                avatar: updatedAvatar,
                 paymentMethods,
               }
             : null;
@@ -168,6 +175,7 @@ export const useAuthStore = create<AuthStore>()(
             name: updatedName,
             phone: data.phone !== undefined ? data.phone.trim() : s.phone,
             email: updatedEmail,
+            avatar: updatedAvatar,
             preferredCurrency: data.preferredCurrency ?? s.preferredCurrency,
             upiId,
             paymentMethods,

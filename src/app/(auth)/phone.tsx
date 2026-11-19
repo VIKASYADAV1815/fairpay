@@ -105,15 +105,15 @@ export default function PhoneLoginScreen() {
 
         if (isUnsupported) {
           Alert.alert(
-            'SMS Test Mode',
-            'Supabase SMS gateway is in developer mode. Use test code 123456 on the next screen to verify.',
+            'SMS Provider Not Configured',
+            'Supabase requires a Twilio/SMS provider to deliver real SMS. Continuing in Development Mode with test code: 12345678',
             [
               {
                 text: 'Continue',
                 onPress: () => {
                   router.push({
                     pathname: '/(auth)/verify',
-                    params: { phone: fullPhone, isDemo: '1' },
+                    params: { phone: fullPhone, isDemo: '1', type: 'sms' },
                   });
                 },
               },
@@ -128,13 +128,13 @@ export default function PhoneLoginScreen() {
       // Navigate to OTP verification screen
       router.push({
         pathname: '/(auth)/verify',
-        params: { phone: fullPhone },
+        params: { phone: fullPhone, type: 'sms' },
       });
     } catch (error: any) {
       console.warn('OTP error:', error?.message || error);
       Alert.alert(
         'Phone Verification',
-        'Could not send SMS. Would you like to proceed in Test Mode with code 123456?',
+        'SMS gateway not connected in Supabase. Continue in Test Mode with code 12345678?',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -142,7 +142,7 @@ export default function PhoneLoginScreen() {
             onPress: () => {
               router.push({
                 pathname: '/(auth)/verify',
-                params: { phone: fullPhone, isDemo: '1' },
+                params: { phone: fullPhone, isDemo: '1', type: 'sms' },
               });
             },
           },

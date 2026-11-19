@@ -8,9 +8,11 @@ import {
   Alert,
   Pressable,
   Modal,
+  Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { SoftCard } from '@/components/SoftCard';
 import { PrimaryButton } from '@/components/PrimaryButton';
@@ -20,6 +22,7 @@ import { PaymentBrandLogo } from '@/components/PaymentBrandLogo';
 import { useAuthStore } from '@/store/auth';
 import { useTripStore } from '@/store/trips';
 import { useColors, useThemeStore } from '@/store/theme';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { CURRENCIES, type CurrencyCode } from '@/lib/currency';
 import { PAY_RAILS, type PayRail, type PaymentMethod } from '@/lib/payments';
 import { COUNTRY_CODES, type CountryCode } from '@/lib/countryCodes';
@@ -32,6 +35,8 @@ export default function ProfileScreen() {
   const {
     name: authName,
     phone: authPhone,
+    avatar: authAvatar,
+    user,
     email,
     preferredCurrency,
     paymentMethods: savedMethods,
@@ -55,6 +60,7 @@ export default function ProfileScreen() {
 
   const initial = getInitialPhoneParts();
   const [name, setName] = useState(authName || '');
+  const [avatar, setAvatar] = useState(authAvatar || user?.avatar || '');
   const [selectedCountry, setSelectedCountry] = useState<CountryCode>(initial.country);
   const [phoneNumber, setPhoneNumber] = useState(initial.number);
   const [countryPickerVisible, setCountryPickerVisible] = useState(false);
@@ -62,7 +68,53 @@ export default function ProfileScreen() {
   const [rail, setRail] = useState<PayRail>(savedMethods[0]?.rail ?? 'upi');
   const [handle, setHandle] = useState(savedMethods[0]?.handle ?? '');
 
-  const save = () => {
+  const pickFromCamera = async () => {
+    const { granted } = await ImagePicker.requestCameraPermissionsAsync();
+    if (!granted) {
+      Alert.alert('Camera Permission', 'Please allow camera access to take a profile picture.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]?.uri) {
+      setAvatar(result.assets[0].uri);
+    }
+  };
+
+  const pickFromLibrary = async () => {
+    const { granted } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!granted) {
+      Alert.alert('Photos Permission', 'Please allow photo library access to choose a profile picture.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]?.uri) {
+      setAvatar(result.assets[0].uri);
+    }
+  };
+
+  const handleChangePhoto = () => {
+    const options: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[] = [
+      { text: 'Take Photo', onPress: pickFromCamera },
+      { text: 'Choose from Library', onPress: pickFromLibrary },
+    ];
+    if (avatar) {
+      options.push({ text: 'Remove Photo', style: 'destructive', onPress: () => setAvatar('') });
+    }
+    options.push({ text: 'Cancel', style: 'cancel' });
+
+    Alert.alert('Profile Photo', 'Update your photo across your statements & groups', options);
+  };
+
+  const save = async () => {
     const fullPhone = phoneNumber.trim() ? `${selectedCountry.dialCode} ${phoneNumber.trim()}` : '';
     const methods: PaymentMethod[] = handle.trim()
       ? [{ rail, handle: handle.trim() }]
@@ -71,21 +123,43 @@ export default function ProfileScreen() {
     updateProfile({
       name: name.trim(),
       phone: fullPhone,
+      avatar,
       preferredCurrency: currency,
       paymentMethods: methods,
     });
+
+    if (isSupabaseConfigured() && user?.id) {
+      try {
+        await supabase
+          .from('users')
+          .update({
+            avatar_url: avatar || null,
+            name: name.trim(),
+            phone_number: fullPhone || null,
+            payment_methods: methods,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', user.id);
+
+        await supabase.auth.updateUser({
+          data: { avatar_url: avatar || null, picture: avatar || null, name: name.trim() },
+        });
+      } catch (err) {
+        console.warn('Profile sync to Supabase error:', err);
+      }
+    }
 
     const prev = authName?.trim().toLowerCase();
     if (prev) {
       trips.forEach((t) => {
         t.members.forEach((m) => {
-          if (m.name.trim().toLowerCase() === prev) {
-            updateMember(t.id, m.id, { name: name.trim(), paymentMethods: methods });
+          if (m.name.trim().toLowerCase() === prev || (user?.id && m.id === user.id)) {
+            updateMember(t.id, m.id, { name: name.trim(), avatar, paymentMethods: methods });
           }
         });
       });
     }
-    Alert.alert('Saved', 'Profile and payment details updated.');
+    Alert.alert('Saved', 'Profile and photo updated.');
   };
 
   return (
@@ -98,7 +172,31 @@ export default function ProfileScreen() {
       >
         <FadeIn>
           <View style={styles.avatarBlock}>
-            <FairpayMark size={72} />
+            <Pressable
+              onPress={handleChangePhoto}
+              style={({ pressed }) => [
+                styles.avatarTouchArea,
+                { opacity: pressed ? 0.88 : 1 },
+              ]}
+              accessibilityLabel="Change profile photo"
+              accessibilityRole="button"
+            >
+              <View style={[styles.avatarWrap, { borderColor: c.separator, backgroundColor: c.card }]}>
+                {avatar ? (
+                  <Image source={{ uri: avatar }} style={styles.avatarImg} />
+                ) : (
+                  <FairpayMark size={76} />
+                )}
+              </View>
+              <View style={[styles.cameraBadge, { backgroundColor: c.accent, borderColor: c.bg }]}>
+                <Ionicons name="camera" size={13} color={c.accentInk} />
+              </View>
+            </Pressable>
+
+            <Pressable onPress={handleChangePhoto} hitSlop={8} style={styles.changeBtn}>
+              <Text style={[styles.changeText, { color: c.accent }]}>Change photo</Text>
+            </Pressable>
+
             <Text style={[styles.name, { color: c.text }]}>{name || 'Your name'}</Text>
             <Text style={[styles.hint, { color: c.textSecondary }]}>
               {email || 'Shown to people in your groups'}
@@ -293,7 +391,46 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, paddingHorizontal: space.xl },
   avatarBlock: { alignItems: 'center', marginBottom: space.xxxl },
-  name: { ...type.title2, marginTop: space.lg },
+  avatarTouchArea: {
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarWrap: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    borderWidth: 1.5,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarImg: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+  },
+  cameraBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  changeBtn: {
+    marginTop: 8,
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+  },
+  changeText: {
+    ...type.caption1,
+    fontWeight: '600',
+  },
+  name: { ...type.title2, marginTop: space.sm },
   hint: { ...type.caption1, marginTop: 4 },
   hintLeft: { ...type.caption1, marginBottom: space.sm, marginLeft: 4 },
   label: {

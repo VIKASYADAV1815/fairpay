@@ -11,6 +11,7 @@ import { isCloudEnabled } from '@/lib/storage';
 export type Member = {
   id: string;
   name: string;
+  avatar?: string;
   /** @deprecated use paymentMethods — kept for older persisted data */
   upiId?: string;
   paymentMethods?: PaymentMethod[];
@@ -104,6 +105,7 @@ type TripStore = {
     memberId: string,
     data: {
       name?: string;
+      avatar?: string;
       upiId?: string;
       paymentMethods?: PaymentMethod[];
     },
@@ -330,6 +332,7 @@ export const useTripStore = create<TripStore>()(
                 const next: Member = {
                   ...m,
                   name: data.name?.trim() || m.name,
+                  avatar: data.avatar !== undefined ? data.avatar : m.avatar,
                 };
                 if (data.paymentMethods !== undefined) {
                   next.paymentMethods = data.paymentMethods;

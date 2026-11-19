@@ -17,34 +17,32 @@ import { Ionicons } from '@expo/vector-icons';
 import { FairpayLogo } from '@/components/FairpayLogo';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { useColors, useThemeStore } from '@/store/theme';
+import { useAuthStore } from '@/store/auth';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import { COUNTRY_CODES, type CountryCode } from '@/lib/countryCodes';
-import { space, type, radius } from '@/theme/tokens';
+import { space, radius } from '@/theme/tokens';
 
-type AuthMethod = 'email' | 'phone';
-type EmailMode = 'login' | 'signup';
+type AuthMode = 'signup' | 'login';
 
 export default function SignupScreen() {
   const insets = useSafeAreaInsets();
   const c = useColors();
   const darkMode = useThemeStore((s) => s.darkMode);
 
-  const [method, setMethod] = useState<AuthMethod>('email');
-  const [emailMode, setEmailMode] = useState<EmailMode>('signup');
+  const [mode, setMode] = useState<AuthMode>('signup');
   const [loading, setLoading] = useState(false);
 
-  // Email form state
+  // Form State
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Phone form state
-  const [phone, setPhone] = useState('');
-  const [selectedCountry, setSelectedCountry] = useState<CountryCode>(COUNTRY_CODES[0]);
-  const [countryPickerVisible, setCountryPickerVisible] = useState(false);
+  // Forgot Password State
+  const [forgotModalVisible, setForgotModalVisible] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
 
-  const handleEmailAuth = async () => {
+  const handleAuth = async () => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
       Alert.alert('Invalid Email', 'Please enter a valid email address.');
@@ -56,57 +54,117 @@ export default function SignupScreen() {
       return;
     }
 
-    if (emailMode === 'signup' && !name.trim()) {
-      Alert.alert('Name Required', 'Please enter your name.');
+    if (mode === 'signup' && !name.trim()) {
+      Alert.alert('Name Required', 'Please enter your full name.');
       return;
     }
 
     if (!isSupabaseConfigured()) {
-      // Demo fallback: require 6-digit OTP verification on verify screen
-      router.push({
-        pathname: '/(auth)/verify',
-        params: {
+      if (mode === 'login') {
+        const displayName = name.trim() || cleanEmail.split('@')[0];
+        useAuthStore.getState().setUser({
+          id: 'demo_user_local',
           email: cleanEmail,
-          type: emailMode,
-          isDemo: '1',
-          name: name.trim() || cleanEmail.split('@')[0],
-        },
-      });
+          phone: '',
+          name: displayName,
+        });
+        useAuthStore.getState().setOnboardingDone(true);
+        useAuthStore.getState().setShowWelcomeModal(false);
+        router.replace('/');
+      } else {
+        router.push({
+          pathname: '/(auth)/verify',
+          params: {
+            email: cleanEmail,
+            type: 'signup',
+            isDemo: '1',
+            name: name.trim() || cleanEmail.split('@')[0],
+          },
+        });
+      }
       return;
     }
 
     try {
       setLoading(true);
 
-      if (emailMode === 'signup') {
-        const userName = name.trim();
+      if (mode === 'login') {
+        // Direct Email + Password Login (Zero OTP friction)
+        const { data: pwdData, error: pwdError } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password,
+        });
 
-        // Step 1: Create the account (with "Confirm email" disabled in Supabase dashboard,
-        // this won't send any email — we send our own branded OTP below)
+        if (pwdError) throw pwdError;
+
+        if (pwdData?.user && pwdData?.session) {
+          const { data: profile } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', pwdData.user.id)
+            .maybeSingle();
+
+          const isProfileComplete = Boolean(
+            profile &&
+            profile.name &&
+            profile.payment_methods &&
+            Array.isArray(profile.payment_methods) &&
+            profile.payment_methods.length > 0
+          );
+
+          const resolvedName =
+            profile?.name ||
+            pwdData.user.user_metadata?.name ||
+            cleanEmail.split('@')[0];
+
+          useAuthStore.getState().setUser({
+            id: pwdData.user.id,
+            email: pwdData.user.email || cleanEmail,
+            phone: profile?.phone_number || '',
+            name: resolvedName,
+            paymentMethods: profile?.payment_methods || [],
+          });
+          useAuthStore.getState().setSession(pwdData.session);
+          useAuthStore.getState().updateProfile({
+            name: resolvedName,
+            email: pwdData.user.email || cleanEmail,
+            phone: profile?.phone_number || '',
+            paymentMethods: profile?.payment_methods || [],
+          });
+
+          if (isProfileComplete) {
+            useAuthStore.getState().setOnboardingDone(true);
+            useAuthStore.getState().setShowWelcomeModal(false);
+            router.replace('/');
+          } else {
+            useAuthStore.getState().setShowWelcomeModal(false);
+            router.replace('/(auth)/profile-setup');
+          }
+          return;
+        }
+      } else {
+        // Sign Up with 8-digit OTP verification
+        const userName = name.trim();
         const { error: signUpError } = await supabase.auth.signUp({
           email: cleanEmail,
           password,
           options: {
             data: { name: userName },
-            // Suppress the default confirmation email — we send our own OTP
             emailRedirectTo: undefined,
           },
         });
 
         if (signUpError) throw signUpError;
 
-        // Step 2: Sign out the auto-session so user must verify via OTP
         await supabase.auth.signOut();
 
-        // Step 3: Send a single branded 6-digit OTP via our custom SMTP (Resend/Fairpay)
         const { error: otpError } = await supabase.auth.signInWithOtp({
           email: cleanEmail,
           options: { shouldCreateUser: false },
         });
 
         if (otpError) {
-          console.warn('OTP send error:', otpError.message);
-          // Still navigate to verify screen — user can resend from there
+          console.warn('OTP dispatch notice:', otpError.message);
         }
 
         router.push({
@@ -117,121 +175,37 @@ export default function SignupScreen() {
             name: userName,
           },
         });
-      } else {
-        // Sign In
-        const { data: pwdData, error: pwdError } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password,
-        });
-
-        if (pwdError) throw pwdError;
-
-        // Ensure session is cleared prior to OTP verification
-        await supabase.auth.signOut();
-
-        try {
-          await supabase.auth.signInWithOtp({
-            email: cleanEmail,
-            options: { shouldCreateUser: false },
-          });
-        } catch (otpSendErr) {
-          console.warn('signInWithOtp error:', otpSendErr);
-        }
-
-        const userName = pwdData.user?.user_metadata?.name || cleanEmail.split('@')[0];
-        router.push({
-          pathname: '/(auth)/verify',
-          params: {
-            email: cleanEmail,
-            type: 'email',
-            name: userName,
-          },
-        });
       }
     } catch (err: any) {
-      console.warn('Email auth error:', err);
+      console.warn('Auth error:', err);
       const msg = err.message || 'Authentication failed. Please check your credentials.';
-      Alert.alert(emailMode === 'signup' ? 'Sign Up Failed' : 'Sign In Failed', msg);
+      Alert.alert(mode === 'login' ? 'Sign In Failed' : 'Sign Up Failed', msg);
     } finally {
       setLoading(false);
     }
   };
 
-  const handlePhoneAuth = async () => {
-    const cleaned = phone.replace(/[\s-]/g, '');
-    if (!cleaned || cleaned.length < 10) {
-      Alert.alert('Invalid Phone', 'Please enter a valid 10-digit mobile number.');
+  const handleForgotPassword = async () => {
+    const targetEmail = (resetEmail || email).trim().toLowerCase();
+    if (!targetEmail || !targetEmail.includes('@')) {
+      Alert.alert('Email Required', 'Please enter your registered email address.');
       return;
     }
 
-    const fullPhone = `${selectedCountry.dialCode}${cleaned}`;
-    setLoading(true);
-
     try {
-      if (!isSupabaseConfigured()) {
-        router.push({
-          pathname: '/(auth)/verify',
-          params: { phone: fullPhone, isDemo: '1' },
-        });
-        return;
-      }
+      setResetLoading(true);
+      const { error } = await supabase.auth.resetPasswordForEmail(targetEmail);
+      if (error) throw error;
 
-      const { error } = await supabase.auth.signInWithOtp({
-        phone: fullPhone,
-      });
-
-      if (error) {
-        const isUnsupported =
-          error.message?.includes('Unsupported phone provider') ||
-          error.message?.includes('provider') ||
-          error.message?.includes('gateway');
-
-        if (isUnsupported) {
-          Alert.alert(
-            'SMS Test Mode',
-            'Supabase SMS gateway is in test mode. Use code 123456 on the next screen to verify.',
-            [
-              {
-                text: 'Continue',
-                onPress: () => {
-                  router.push({
-                    pathname: '/(auth)/verify',
-                    params: { phone: fullPhone, isDemo: '1' },
-                  });
-                },
-              },
-            ],
-          );
-          return;
-        }
-
-        throw error;
-      }
-
-      router.push({
-        pathname: '/(auth)/verify',
-        params: { phone: fullPhone },
-      });
-    } catch (err: any) {
-      console.warn('Phone OTP error:', err);
+      setForgotModalVisible(false);
       Alert.alert(
-        'Phone Verification',
-        'Could not send SMS. Would you like to continue in Test Mode with code 123456?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Use Test Code',
-            onPress: () => {
-              router.push({
-                pathname: '/(auth)/verify',
-                params: { phone: fullPhone, isDemo: '1' },
-              });
-            },
-          },
-        ],
+        'Password Reset Sent',
+        `A password reset link was dispatched to ${targetEmail}. Please check your inbox.`,
       );
+    } catch (err: any) {
+      Alert.alert('Reset Failed', err.message || 'Could not send reset email. Please try again.');
     } finally {
-      setLoading(false);
+      setResetLoading(false);
     }
   };
 
@@ -248,7 +222,7 @@ export default function SignupScreen() {
         contentContainerStyle={[
           styles.scrollContent,
           {
-            paddingTop: insets.top + space.lg,
+            paddingTop: insets.top + space.md,
             paddingBottom: insets.bottom + space.xxl,
           },
         ]}
@@ -260,222 +234,177 @@ export default function SignupScreen() {
           <Pressable onPress={handleSkip} hitSlop={12} style={styles.closeBtn}>
             <Ionicons name="close" size={24} color={c.textSecondary} />
           </Pressable>
-          <FairpayLogo width={130} />
+          <FairpayLogo width={120} />
           <View style={{ width: 36 }} />
         </View>
 
         {/* Title */}
         <View style={styles.header}>
           <Text style={[styles.title, { color: c.text }]}>
-            {method === 'email'
-              ? emailMode === 'signup'
-                ? 'Create account'
-                : 'Welcome back'
-              : 'Sign up with Phone'}
+            {mode === 'signup' ? 'Create account' : 'Welcome back'}
           </Text>
           <Text style={[styles.subtitle, { color: c.textSecondary }]}>
             Zero-friction shared money for any group
           </Text>
         </View>
 
-        {/* Method Switcher Tabs: Email vs Phone */}
-        <View style={[styles.tabsWrap, { backgroundColor: darkMode ? '#2C2C2E' : '#F2F2F7' }]}>
+        {/* Switcher Tabs: Sign Up vs Log In */}
+        <View style={[styles.tabsWrap, { backgroundColor: darkMode ? '#1C1C1E' : '#F2F2F7' }]}>
           <Pressable
             style={[
               styles.tab,
-              method === 'email' && [styles.activeTab, { backgroundColor: c.card }],
+              mode === 'signup' && [styles.activeTab, { backgroundColor: darkMode ? '#2C2C2E' : '#FFFFFF' }],
             ]}
-            onPress={() => setMethod('email')}
+            onPress={() => setMode('signup')}
           >
             <Ionicons
-              name="mail-outline"
-              size={18}
-              color={method === 'email' ? c.text : c.textSecondary}
+              name="person-add-outline"
+              size={16}
+              color={mode === 'signup' ? c.text : c.textSecondary}
             />
             <Text
               style={[
                 styles.tabText,
-                { color: method === 'email' ? c.text : c.textSecondary },
+                { color: mode === 'signup' ? c.text : c.textSecondary },
               ]}
             >
-              Email
+              Sign Up
             </Text>
           </Pressable>
 
           <Pressable
             style={[
               styles.tab,
-              method === 'phone' && [styles.activeTab, { backgroundColor: c.card }],
+              mode === 'login' && [styles.activeTab, { backgroundColor: darkMode ? '#2C2C2E' : '#FFFFFF' }],
             ]}
-            onPress={() => setMethod('phone')}
+            onPress={() => setMode('login')}
           >
             <Ionicons
-              name="call-outline"
-              size={18}
-              color={method === 'phone' ? c.text : c.textSecondary}
+              name="log-in-outline"
+              size={16}
+              color={mode === 'login' ? c.text : c.textSecondary}
             />
             <Text
               style={[
                 styles.tabText,
-                { color: method === 'phone' ? c.text : c.textSecondary },
+                { color: mode === 'login' ? c.text : c.textSecondary },
               ]}
             >
-              Phone
+              Log In
             </Text>
           </Pressable>
         </View>
 
         {/* Form Body */}
-        {method === 'email' ? (
-          <View style={styles.form}>
-            {emailMode === 'signup' && (
-              <View style={styles.inputWrap}>
-                <Text style={[styles.label, { color: c.textSecondary }]}>Full Name</Text>
-                <TextInput
-                  value={name}
-                  onChangeText={setName}
-                  placeholder="e.g. Vikas Sharma"
-                  placeholderTextColor={c.textTertiary}
-                  autoCapitalize="words"
-                  style={[
-                    styles.input,
-                    {
-                      backgroundColor: c.fill,
-                      color: c.text,
-                      borderColor: c.separator,
-                    },
-                  ]}
-                />
-              </View>
-            )}
-
+        <View style={styles.form}>
+          {mode === 'signup' && (
             <View style={styles.inputWrap}>
-              <Text style={[styles.label, { color: c.textSecondary }]}>Email Address</Text>
+              <Text style={[styles.label, { color: c.textSecondary }]}>Full Name</Text>
               <TextInput
-                value={email}
-                onChangeText={setEmail}
-                placeholder="name@example.com"
+                value={name}
+                onChangeText={setName}
+                placeholder="e.g. Vikas Sharma"
                 placeholderTextColor={c.textTertiary}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                autoComplete="email"
+                autoCapitalize="words"
                 style={[
                   styles.input,
                   {
-                    backgroundColor: c.fill,
+                    backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7',
                     color: c.text,
-                    borderColor: c.separator,
                   },
                 ]}
               />
             </View>
+          )}
 
-            <View style={styles.inputWrap}>
+          <View style={styles.inputWrap}>
+            <Text style={[styles.label, { color: c.textSecondary }]}>Email Address</Text>
+            <TextInput
+              value={email}
+              onChangeText={setEmail}
+              placeholder="name@example.com"
+              placeholderTextColor={c.textTertiary}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              autoComplete="email"
+              style={[
+                styles.input,
+                {
+                  backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7',
+                  color: c.text,
+                },
+              ]}
+            />
+          </View>
+
+          <View style={styles.inputWrap}>
+            <View style={styles.passwordHeaderRow}>
               <Text style={[styles.label, { color: c.textSecondary }]}>Password</Text>
-              <View
-                style={[
-                  styles.passwordRow,
-                  {
-                    backgroundColor: c.fill,
-                    borderColor: c.separator,
-                  },
-                ]}
-              >
-                <TextInput
-                  value={password}
-                  onChangeText={setPassword}
-                  placeholder="At least 6 characters"
-                  placeholderTextColor={c.textTertiary}
-                  secureTextEntry={!showPassword}
-                  style={[styles.passwordInput, { color: c.text }]}
-                />
+              {mode === 'login' && (
                 <Pressable
-                  onPress={() => setShowPassword((prev) => !prev)}
+                  onPress={() => {
+                    setResetEmail(email);
+                    setForgotModalVisible(true);
+                  }}
                   hitSlop={8}
-                  style={styles.eyeBtn}
                 >
-                  <Ionicons
-                    name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                    size={20}
-                    color={c.textSecondary}
-                  />
+                  <Text style={[styles.forgotLink, { color: c.textSecondary }]}>Forgot password?</Text>
                 </Pressable>
-              </View>
+              )}
             </View>
-
-            <View style={{ marginTop: space.md }}>
-              <PrimaryButton
-                label={loading ? 'Processing...' : emailMode === 'signup' ? 'Create Account' : 'Sign In'}
-                variant="accent"
-                disabled={loading}
-                onPress={handleEmailAuth}
-              />
-            </View>
-
-            {/* Toggle Login / Signup */}
-            <Pressable
-              onPress={() => setEmailMode((m) => (m === 'signup' ? 'login' : 'signup'))}
-              style={styles.modeToggle}
+            <View
+              style={[
+                styles.passwordRow,
+                {
+                  backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7',
+                },
+              ]}
             >
-              <Text style={[styles.modeToggleText, { color: c.textSecondary }]}>
-                {emailMode === 'signup' ? (
-                  <>Already have an account? <Text style={{ color: c.text, fontWeight: '700' }}>Log in</Text></>
-                ) : (
-                  <>Don't have an account? <Text style={{ color: c.text, fontWeight: '700' }}>Sign up</Text></>
-                )}
-              </Text>
-            </Pressable>
-          </View>
-        ) : (
-          /* Phone Form */
-          <View style={styles.form}>
-            <View style={styles.inputWrap}>
-              <Text style={[styles.label, { color: c.textSecondary }]}>Mobile Number</Text>
-              <View
-                style={[
-                  styles.phoneRow,
-                  {
-                    backgroundColor: c.fill,
-                    borderColor: c.separator,
-                  },
-                ]}
-              >
-                <Pressable
-                  onPress={() => setCountryPickerVisible(true)}
-                  style={styles.countryCodeBadge}
-                >
-                  <Text style={[styles.countryCodeText, { color: c.text }]}>
-                    {selectedCountry.flag} {selectedCountry.dialCode}
-                  </Text>
-                  <Ionicons name="chevron-down" size={12} color={c.textSecondary} style={{ marginLeft: 4 }} />
-                </Pressable>
-                <TextInput
-                  value={phone}
-                  onChangeText={setPhone}
-                  placeholder="98765 43210"
-                  placeholderTextColor={c.textTertiary}
-                  keyboardType="phone-pad"
-                  maxLength={15}
-                  style={[styles.phoneInput, { color: c.text }]}
-                  autoFocus
-                />
-              </View>
-            </View>
-
-            <Text style={[styles.hint, { color: c.textTertiary }]}>
-              We will send a 6-digit verification code to this number.
-            </Text>
-
-            <View style={{ marginTop: space.lg }}>
-              <PrimaryButton
-                label={loading ? 'Sending code...' : 'Send OTP'}
-                variant="accent"
-                disabled={loading || phone.trim().length < 8}
-                onPress={handlePhoneAuth}
+              <TextInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder="At least 6 characters"
+                placeholderTextColor={c.textTertiary}
+                secureTextEntry={!showPassword}
+                style={[styles.passwordInput, { color: c.text }]}
               />
+              <Pressable
+                onPress={() => setShowPassword((prev) => !prev)}
+                hitSlop={8}
+                style={styles.eyeBtn}
+              >
+                <Ionicons
+                  name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                  size={19}
+                  color={c.textSecondary}
+                />
+              </Pressable>
             </View>
           </View>
-        )}
+
+          <View style={{ marginTop: space.sm }}>
+            <PrimaryButton
+              label={loading ? 'Processing…' : mode === 'signup' ? 'Create Account' : 'Sign In'}
+              variant="accent"
+              disabled={loading}
+              onPress={handleAuth}
+            />
+          </View>
+
+          {/* Bottom Switcher Link */}
+          <Pressable
+            onPress={() => setMode((m) => (m === 'signup' ? 'login' : 'signup'))}
+            style={styles.modeToggle}
+          >
+            <Text style={[styles.modeToggleText, { color: c.textSecondary }]}>
+              {mode === 'signup' ? (
+                <>Already have an account? <Text style={{ color: c.text, fontWeight: '500' }}>Log in</Text></>
+              ) : (
+                <>Don't have an account? <Text style={{ color: c.text, fontWeight: '500' }}>Sign up</Text></>
+              )}
+            </Text>
+          </Pressable>
+        </View>
 
         {/* Skip Button */}
         <Pressable onPress={handleSkip} style={styles.skipBtn}>
@@ -490,7 +419,7 @@ export default function SignupScreen() {
             By continuing, you agree to our{' '}
             <Text
               onPress={() => router.push('/privacy')}
-              style={{ color: c.text, textDecorationLine: 'underline', fontWeight: '600' }}
+              style={{ color: c.text, textDecorationLine: 'underline', fontWeight: '500' }}
             >
               Terms & Privacy Policy
             </Text>
@@ -498,46 +427,51 @@ export default function SignupScreen() {
         </View>
       </ScrollView>
 
-      {/* Country Code Picker Modal */}
+      {/* Forgot Password Modal */}
       <Modal
-        visible={countryPickerVisible}
+        visible={forgotModalVisible}
         transparent
         animationType="slide"
-        onRequestClose={() => setCountryPickerVisible(false)}
+        onRequestClose={() => setForgotModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: c.card }]}>
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: c.text }]}>Select Country Code</Text>
-              <Pressable onPress={() => setCountryPickerVisible(false)} hitSlop={10}>
+              <Text style={[styles.modalTitle, { color: c.text }]}>Reset Password</Text>
+              <Pressable onPress={() => setForgotModalVisible(false)} hitSlop={10}>
                 <Ionicons name="close" size={24} color={c.textSecondary} />
               </Pressable>
             </View>
 
-            <ScrollView style={{ maxHeight: 380 }}>
-              {COUNTRY_CODES.map((item) => (
-                <Pressable
-                  key={`${item.code}-${item.dialCode}`}
-                  style={[
-                    styles.countryItem,
-                    { borderBottomColor: c.separator },
-                    selectedCountry.dialCode === item.dialCode && {
-                      backgroundColor: c.fillSecondary,
-                    },
-                  ]}
-                  onPress={() => {
-                    setSelectedCountry(item);
-                    setCountryPickerVisible(false);
-                  }}
-                >
-                  <Text style={styles.countryItemFlag}>{item.flag}</Text>
-                  <Text style={[styles.countryItemName, { color: c.text }]}>{item.name}</Text>
-                  <Text style={[styles.countryItemDial, { color: c.textSecondary }]}>
-                    {item.dialCode}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
+            <Text style={[styles.modalSubtitle, { color: c.textSecondary }]}>
+              Enter your registered email address and we will dispatch a secure password reset link.
+            </Text>
+
+            <TextInput
+              value={resetEmail}
+              onChangeText={setResetEmail}
+              placeholder="name@example.com"
+              placeholderTextColor={c.textTertiary}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              style={[
+                styles.modalInput,
+                {
+                  backgroundColor: darkMode ? '#1C1C1E' : '#F5F5F7',
+                  color: c.text,
+                },
+              ]}
+              autoFocus
+            />
+
+            <View style={{ marginTop: 20 }}>
+              <PrimaryButton
+                label={resetLoading ? 'Sending link…' : 'Send Reset Link'}
+                variant="accent"
+                disabled={resetLoading || !resetEmail.trim()}
+                onPress={handleForgotPassword}
+              />
+            </View>
           </View>
         </View>
       </Modal>
@@ -569,21 +503,23 @@ const styles = StyleSheet.create({
     marginBottom: space.xl,
   },
   title: {
-    ...type.title1,
-    fontSize: 26,
-    fontWeight: '800',
+    fontSize: 27,
+    fontWeight: '300', // Apple SF Pro Display Light
+    letterSpacing: -0.7,
     textAlign: 'center',
     marginBottom: 6,
   },
   subtitle: {
-    ...type.subheadline,
+    fontSize: 14,
+    fontWeight: '400',
     textAlign: 'center',
     lineHeight: 20,
+    letterSpacing: -0.1,
   },
   tabsWrap: {
     flexDirection: 'row',
     borderRadius: radius.md,
-    padding: 4,
+    padding: 3,
     marginBottom: space.xl,
   },
   tab: {
@@ -591,20 +527,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 6,
     paddingVertical: 10,
     borderRadius: radius.sm,
   },
   activeTab: {
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: { width: 0, height: 1.5 },
     shadowOpacity: 0.08,
-    shadowRadius: 4,
+    shadowRadius: 3,
     elevation: 2,
   },
   tabText: {
-    ...type.subheadline,
-    fontWeight: '700',
+    fontSize: 13.5,
+    fontWeight: '500',
+    letterSpacing: -0.1,
   },
   form: {
     gap: space.md,
@@ -613,75 +550,61 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   label: {
-    ...type.caption1,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '500',
+    marginLeft: 2,
+    letterSpacing: -0.1,
+  },
+  passwordHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginLeft: 2,
   },
+  forgotLink: {
+    fontSize: 12,
+    fontWeight: '400',
+    textDecorationLine: 'underline',
+  },
   input: {
-    height: 52,
+    height: 50,
     borderRadius: radius.md,
-    borderWidth: 1,
     paddingHorizontal: space.md,
-    fontSize: 16,
+    fontSize: 15,
+    fontWeight: '400',
   },
   passwordRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    height: 52,
+    height: 50,
     borderRadius: radius.md,
-    borderWidth: 1,
     paddingHorizontal: space.md,
   },
   passwordInput: {
     flex: 1,
     height: '100%',
-    fontSize: 16,
+    fontSize: 15,
+    fontWeight: '400',
   },
   eyeBtn: {
     padding: 6,
-  },
-  phoneRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 52,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    paddingHorizontal: space.sm,
-  },
-  countryCodeBadge: {
-    paddingHorizontal: space.sm,
-    paddingVertical: 6,
-  },
-  countryCodeText: {
-    ...type.subheadline,
-    fontWeight: '700',
-  },
-  phoneInput: {
-    flex: 1,
-    height: '100%',
-    fontSize: 17,
-    paddingLeft: space.xs,
-  },
-  hint: {
-    ...type.caption1,
-    lineHeight: 16,
-    marginLeft: 2,
   },
   modeToggle: {
     alignItems: 'center',
     paddingVertical: space.md,
   },
   modeToggleText: {
-    ...type.footnote,
+    fontSize: 13,
+    fontWeight: '400',
   },
   skipBtn: {
     alignItems: 'center',
-    paddingVertical: space.lg,
-    marginTop: space.sm,
+    paddingVertical: space.md,
+    marginTop: space.xs,
   },
   skipText: {
-    ...type.subheadline,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '400',
   },
   footer: {
     marginTop: 'auto',
@@ -689,7 +612,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   terms: {
-    ...type.caption2,
+    fontSize: 11.5,
+    fontWeight: '400',
     textAlign: 'center',
     lineHeight: 18,
   },
@@ -708,18 +632,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: space.lg,
+    marginBottom: 8,
   },
-  modalTitle: { ...type.headline, fontSize: 18 },
-  countryItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    letterSpacing: -0.2,
   },
-  countryItemFlag: { fontSize: 22, marginRight: 12 },
-  countryItemName: { flex: 1, ...type.body, fontWeight: '500' },
-  countryItemDial: { ...type.subheadline, fontWeight: '600' },
+  modalSubtitle: {
+    fontSize: 13,
+    fontWeight: '400',
+    lineHeight: 18,
+    marginBottom: 16,
+  },
+  modalInput: {
+    height: 50,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    fontSize: 15,
+    fontWeight: '400',
+  },
 });

@@ -83,9 +83,10 @@ async function loadPhoneFrame(): Promise<string> {
 async function fetchImageBase64(url: string, timeoutMs = 2500): Promise<string> {
   try {
     if (url.startsWith('data:')) return url;
-    if (url.startsWith('file://')) {
+    if (url.startsWith('file://') || url.startsWith('content://') || url.startsWith('/')) {
       const b64 = await readAsStringAsync(url, { encoding: EncodingType.Base64 });
-      return `data:image/jpeg;base64,${b64}`;
+      const mime = url.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+      return `data:${mime};base64,${b64}`;
     }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -115,7 +116,7 @@ async function loadMemberAvatars(
   const authUser = authState.user;
   const authName = (authState.name || '').trim().toLowerCase();
 
-  let currentUserAvatarUrl: string | undefined = authUser?.avatar;
+  let currentUserAvatarUrl: string | undefined = authState.avatar || authUser?.avatar;
   if (!currentUserAvatarUrl) {
     try {
       const session = authState.session;
@@ -167,6 +168,14 @@ async function loadMemberAvatars(
     }),
   );
 
+  // If currentUser is present but couldn't be matched by exact name, assign to first member or user member
+  if (loadedUserAvatar && members.length > 0) {
+    const hasUserMapped = members.some((m) => memberAvatars[m.id] === loadedUserAvatar);
+    if (!hasUserMapped) {
+      memberAvatars[members[0].id] = loadedUserAvatar;
+    }
+  }
+
   return {
     memberAvatars,
     userAvatar: loadedUserAvatar,
@@ -187,10 +196,25 @@ export async function shareTripPdf(trip: Trip) {
   const pendingAmt = transfers.reduce((a, t) => a + t.amount, 0);
   const msg = getTripMessage(trip, done);
 
-  // Load phone mockup frame and member avatars concurrently
+  // Pre-fetch receipt thumbnails
+  const receiptExpenses = trip.expenses.filter((e) => !!e.receiptUri);
+  const receiptCount = receiptExpenses.length;
+  const receiptThumbnails: Record<string, string> = {};
+
+  // Load phone mockup frame, member avatars, and receipt thumbnails concurrently
   const [phoneImg, avatarData] = await Promise.all([
     loadPhoneFrame(),
     loadMemberAvatars(trip.members),
+    Promise.all(
+      receiptExpenses.map(async (e) => {
+        try {
+          const b64 = await fetchImageBase64(e.receiptUri!, 2000);
+          receiptThumbnails[e.id] = b64;
+        } catch {
+          // ignore
+        }
+      }),
+    ),
   ]);
 
   // ── Build expense rows ──
@@ -202,9 +226,10 @@ export async function shareTripPdf(trip: Trip) {
     const sc = e.splits?.length || trip.members.length || 1;
     const sa = sc > 0 ? e.amount / sc : e.amount;
     const bg = i % 2 === 0 ? '#FFFFFF' : '#F9F9F9';
+    const rThumb = receiptThumbnails[e.id];
     return `<tr>
       <td style="background-color:${bg};padding:7px 12px;border-bottom:1px solid #E5E5EA;color:#3A3A3C;font-size:9.5px;white-space:nowrap">${esc(dt)}</td>
-      <td style="background-color:${bg};padding:7px 12px;border-bottom:1px solid #E5E5EA;font-size:9.5px"><span style="color:#000;font-weight:400">${esc(e.title)}</span>${e.tag ? `<br><span style="font-size:7px;color:#8E8E93;background-color:#F2F2F7;padding:1px 5px;border-radius:3px;display:inline-block;margin-top:2px">${esc(e.tag)}</span>` : ''}${e.recurring ? ` <span style="font-size:7px;color:#92400E;background:#FEF3C7;padding:1px 4px;border-radius:3px;font-weight:400">recurring</span>` : ''}</td>
+      <td style="background-color:${bg};padding:7px 12px;border-bottom:1px solid #E5E5EA;font-size:9.5px"><span style="color:#000;font-weight:400">${esc(e.title)}</span>${e.tag ? `<br><span style="font-size:7px;color:#8E8E93;background-color:#F2F2F7;padding:1px 5px;border-radius:3px;display:inline-block;margin-top:2px">${esc(e.tag)}</span>` : ''}${e.recurring ? ` <span style="font-size:7px;color:#92400E;background:#FEF3C7;padding:1px 4px;border-radius:3px;font-weight:400">recurring</span>` : ''}${e.receiptUri ? ` <span style="display:inline-block;background-color:#EFEFF4;color:#1C1C1E;padding:1px 5px;border-radius:3px;font-size:7px;font-weight:500;margin-top:2px;vertical-align:middle">${rThumb ? `<img src="${rThumb}" style="width:11px;height:11px;border-radius:2px;object-fit:cover;vertical-align:middle;margin-right:3px;display:inline-block" />` : ''}&#x1F4CE; Receipt</span>` : ''}</td>
       <td style="background-color:${bg};padding:7px 12px;border-bottom:1px solid #E5E5EA;font-size:9.5px"><span style="display:inline-block;background-color:#B2FF24;color:#000;padding:2px 7px;border-radius:4px;font-size:8.5px;font-weight:400" class="green">${pm ? payIcon(pm.rail, 11) : ''}${esc(pName)}</span></td>
       <td style="background-color:${bg};padding:7px 12px;border-bottom:1px solid #E5E5EA;text-align:right;font-size:10.5px"><span style="color:#000;font-weight:400">${esc(formatMoney(e.amount, currency))}</span></td>
       <td style="background-color:${bg};padding:7px 12px;border-bottom:1px solid #E5E5EA;text-align:right;font-size:8.5px;color:#8E8E93">${esc(formatMoney(sa, currency))}/ea</td>
@@ -271,9 +296,13 @@ export async function shareTripPdf(trip: Trip) {
   const mockExpenses = trip.expenses.slice(0, 2).map((e) => {
     const payer = trip.members.find((m) => m.id === e.paidById);
     const pName = payer?.name || 'Member';
+    const rThumb = receiptThumbnails[e.id];
     return `<div style="display:table;width:100%;padding:3px 0;border-bottom:1px solid #3A3A3C">
       <div style="display:table-cell;vertical-align:middle">
-        <div style="color:#FFFFFF;font-weight:400;font-size:9px">${esc(e.title)}</div>
+        <div style="color:#FFFFFF;font-weight:400;font-size:9px">
+          ${esc(e.title)}
+          ${e.receiptUri ? ` <span style="display:inline-block;font-size:7px;background-color:#2C2C2E;border:0.5px solid #3A3A3C;color:#B2FF24;padding:0.5px 4px;border-radius:3px;vertical-align:middle">${rThumb ? `<img src="${rThumb}" style="width:9px;height:9px;border-radius:2px;object-fit:cover;vertical-align:middle;margin-right:2px;display:inline-block" />` : ''}&#x1F4CE; Receipt</span>` : ''}
+        </div>
         <div style="color:#8E8E93;font-size:7px;font-weight:300">Paid by ${esc(pName)}${e.tag ? ` &middot; ${esc(e.tag)}` : ''}</div>
       </div>
       <div style="display:table-cell;vertical-align:middle;text-align:right">
@@ -398,7 +427,7 @@ table { border-collapse: collapse; }
         <div style="font-size:7px;font-weight:500;color:#8E8E93;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:3px">Total Spent</div>
         <div style="font-size:18px;font-weight:300;color:#000;letter-spacing:-0.6px;margin-bottom:2px">${esc(formatMoney(total, currency))}</div>
         <div style="height:1px;background-color:rgba(0,0,0,0.06);margin-bottom:3px"></div>
-        <div style="font-size:7.5px;color:#8E8E93;font-weight:300">${trip.expenses.length} expense(s) tracked</div>
+        <div style="font-size:7.5px;color:#8E8E93;font-weight:300">${trip.expenses.length} expense(s)${receiptCount > 0 ? ` &middot; ${receiptCount} with receipt` : ''}</div>
       </td>
       <td style="background-color:#FFFFFF;border-radius:8px;padding:9px 13px;vertical-align:top;width:25%" class="white">
         <div style="font-size:7px;font-weight:500;color:#8E8E93;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:3px">Per Person</div>
@@ -433,7 +462,7 @@ table { border-collapse: collapse; }
           <span style="font-size:7.5px;color:#8E8E93;margin-left:6px;font-weight:300">— all amounts in ${currency}</span>
         </td>
         <td style="text-align:right;vertical-align:middle">
-          <span style="font-size:7px;color:#8E8E93;background-color:#F2F2F7;padding:1.5px 6px;border-radius:3px" class="fill">${trip.expenses.length} item(s)</span>
+          <span style="font-size:7px;color:#8E8E93;background-color:#F2F2F7;padding:1.5px 6px;border-radius:3px" class="fill">${trip.expenses.length} item(s)${receiptCount > 0 ? ` &middot; &#x1F4CE; ${receiptCount} receipt${receiptCount > 1 ? 's' : ''}` : ''}</span>
         </td>
       </tr></table>
       <table style="width:100%">
@@ -589,7 +618,7 @@ table { border-collapse: collapse; }
           <span style="font-size:11.5px;font-weight:700;color:#FFF;vertical-align:middle">Fairpay</span>
         </div>
         <div style="display:table-cell;text-align:right;vertical-align:middle">
-          ${avatarData.userAvatar ? `<img src="${avatarData.userAvatar}" style="width:18px;height:18px;border-radius:50%;border:1.5px solid #B2FF24;vertical-align:middle;object-fit:cover;display:inline-block" />` : `<span style="font-size:7px;color:#8E8E93;background-color:#2C2C2E;padding:2px 5px;border-radius:3.5px;font-weight:600" class="phonedark">GROUP</span>`}
+          ${avatarData.userAvatar ? `<img src="${avatarData.userAvatar}" style="width:19px;height:19px;border-radius:50%;border:1.5px solid #B2FF24;vertical-align:middle;object-fit:cover;display:inline-block;box-sizing:border-box" />` : `<span style="font-size:7px;color:#8E8E93;background-color:#2C2C2E;padding:2px 5px;border-radius:3.5px;font-weight:600" class="phonedark">GROUP</span>`}
         </div>
       </div>
 
@@ -610,7 +639,7 @@ table { border-collapse: collapse; }
       <div style="font-size:23px;font-weight:300;color:#FFF;letter-spacing:-0.6px;margin-bottom:2px">${esc(formatMoney(total, currency))}</div>
       <div style="display:table;width:100%;margin-bottom:7px">
         <div style="display:table-cell;font-size:8px;color:#8E8E93;font-weight:300">Your share: <b style="color:#FFF;font-weight:500">${esc(formatMoney(avg, currency))}</b></div>
-        <div style="display:table-cell;text-align:right;font-size:8px;color:#8E8E93;font-weight:300">${trip.expenses.length} expense${trip.expenses.length !== 1 ? 's' : ''}</div>
+        <div style="display:table-cell;text-align:right;font-size:8px;color:#8E8E93;font-weight:300">${trip.expenses.length} expense${trip.expenses.length !== 1 ? 's' : ''}${receiptCount > 0 ? ` &middot; &#x1F4CE; ${receiptCount}` : ''}</div>
       </div>
 
       <!-- Member avatars -->
